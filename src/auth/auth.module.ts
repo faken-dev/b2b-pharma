@@ -1,11 +1,12 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { User } from './entities/user.entity';
+import { NotificationModule } from 'src/notification/notification.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([User])],
+  imports: [TypeOrmModule.forFeature([User]), NotificationModule],
   controllers: [],
   providers: [],
-  exports: [TypeOrmModule], // expose the repository to other modules (e.g., Notification if needed)
+  exports: [TypeOrmModule],
 })
 export class AuthModule {}
