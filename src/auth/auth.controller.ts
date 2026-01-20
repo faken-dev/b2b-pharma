@@ -6,11 +6,15 @@ import {
   HttpStatus,
   Get,
   Query,
+  UseGuards,
+  Request,
 } from '@nestjs/common';
 import { RegisterDto } from './dto/register.dto';
+import { LoginDto } from './dto/login.dto';
 import { AuthService } from './auth.service';
 import { VerifyEmailDto } from './dto/verify-email.dto';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
+import { JwtAuthGuard } from './jwt-auth.guard';
 
 @ApiTags('auth')
 @Controller('auth')
@@ -49,5 +53,38 @@ export class AuthController {
   @ApiResponse({ status: 200, description: 'Verification result' })
   async verify(@Query() query: VerifyEmailDto) {
     return this.authService.verifyEmail(query.token);
+  }
+
+  /**
+   * POST /auth/login
+   * Returns an `{ accessToken: string }` payload.
+   */
+  @Post('login')
+  @ApiOperation({ summary: 'Login with e‑mail & password' })
+  @ApiResponse({
+    status: 200,
+    description: 'Login successful (access token returned)',
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Invalid credentials or unverified account',
+  })
+  async login(@Body() loginDto: LoginDto) {
+    return this.authService.login(loginDto.email, loginDto.password);
+  }
+
+  /**
+   * GET /auth/me
+   * A demo protected route that returns the current user (without password).
+   * Use the Authorization header:  Bearer <accessToken>
+   */
+  @Get('me')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Get current authenticated user' })
+  @ApiResponse({ status: 200, description: 'Authenticated user profile' })
+  @ApiResponse({ status: 401, description: 'Missing or invalid JWT' })
+  getProfile(@Request() req) {
+    // The JwtStrategy placed the user object on req.user
+    return req.user;
   }
 }
