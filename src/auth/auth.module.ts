@@ -6,12 +6,16 @@ import { AuthController } from './auth.controller';
 import { NotificationModule } from '../notification/notification.module';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigService, ConfigModule } from '@nestjs/config';
+import { JwtStrategy } from './jwt.strategy';
+import { JwtAuthGuard } from './jwt-auth.guard';
+import { PassportModule } from '@nestjs/passport';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([User]),
     NotificationModule,
     ConfigModule,
+    PassportModule.register({ defaultStrategy: 'jwt' }),
     JwtModule.registerAsync({
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
@@ -21,7 +25,7 @@ import { ConfigService, ConfigModule } from '@nestjs/config';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService],
+  providers: [AuthService, JwtStrategy, JwtAuthGuard],
   exports: [AuthService],
 })
 export class AuthModule {}
