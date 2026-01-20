@@ -1,4 +1,9 @@
-import { Injectable, BadRequestException, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  BadRequestException,
+  Logger,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { RegisterDto } from './dto/register.dto';
 import { Repository } from 'typeorm';
 import { User } from './entities/user.entity';
@@ -6,6 +11,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import * as bcrypt from 'bcrypt';
 import { NotificationService } from '../notification/notification.service';
 import { JwtService } from '@nestjs/jwt';
+import { JwtPayload } from './jwt.payload.interface';
 
 @Injectable()
 export class AuthService {
@@ -120,5 +126,47 @@ export class AuthService {
     this.logger.log(`User ${user.email} verified successfully`);
 
     return { message: 'Account verified successfully' };
+  }
+
+  /**
+   * Validate user credentials and issue an **access JWT**.
+   * The token payload contains the user's `sub` (id) and e‑mail.
+   * Returns an object `{ accessToken: string }` that will be wrapped
+   * by the global TransformInterceptor.
+   */
+  async login(email: string, plainPassword: string) {
+    const user = await this.userRepo.findOne({
+      where: { email },
+    });
+
+    if (!user) {
+      this.logger.warn(`Login attempt with unknown e-mail: ${email}`);
+      throw new UnauthorizedException('Invalid credentials');
+    }
+
+    if (!user.isVerified) {
+      this.logger.warn(`Login attempt for unverified account: ${email}`);
+      throw new UnauthorizedException('Account not verified');
+    }
+
+    const passwordMatches = await bcrypt.compare(plainPassword, user.password);
+
+    if (!passwordMatches) {
+      this.logger.warn(`Invalid password for e-mail: ${email}`);
+      throw new UnauthorizedException('Invalid credentials');
+    }
+
+    const payload: JwtPayload = {
+      sub: user.id,
+      email: user.email,
+    };
+
+    const accessToken = await this.jwtService.signAsync(payload, {
+      expiresIn: '1h',
+    });
+
+    this.logger.log(`User ${email} logged in successfully`);
+
+    return { accessToken };
   }
 }
