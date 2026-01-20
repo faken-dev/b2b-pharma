@@ -72,4 +72,53 @@ export class AuthService {
     const { password: _password, ...userWithoutPassword } = savedUser;
     return userWithoutPassword;
   }
+
+  /**
+   * Verify the e‑mail verification token that was sent to the user.
+   *
+   * @param token JWT created in register()
+   * @throws BadRequestException if token is invalid/expired
+   * @throws NotFoundException   if user cannot be found
+   */
+  async verifyEmail(token: string) {
+    // Verify the JWT – this also checks expiration automatically.
+    let payload: any;
+    try {
+      // `jwtService.verifyAsync` will throw on malformed/expired token.
+      payload = await this.jwtService.verifyAsync(token);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      this.logger.warn(`Invalid verification token: ${message}`);
+      throw new BadRequestException('Invalid or expired verification token');
+    }
+
+    // Payload sanity check – we expect an object with `sub` (user id)
+    const userId = payload?.sub;
+    if (!userId) {
+      this.logger.warn(`Verification token missing "sub" claim`);
+      throw new BadRequestException('Malformed verification token');
+    }
+
+    //Load the user from DB
+    const user = await this.userRepo.findOne({ where: { id: userId } });
+    if (!user) {
+      this.logger.warn(
+        `Verification attempted for non‑existent user id=${userId}`,
+      );
+      throw new BadRequestException('User not found');
+    }
+
+    // Idempotent handling – if already verified we simply return.
+    if (user.isVerified) {
+      this.logger.log(`User ${user.email} already verified`);
+      return { message: 'Account already verified' };
+    }
+
+    // Flip the flag and persist
+    user.isVerified = true;
+    await this.userRepo.save(user);
+    this.logger.log(`User ${user.email} verified successfully`);
+
+    return { message: 'Account verified successfully' };
+  }
 }
