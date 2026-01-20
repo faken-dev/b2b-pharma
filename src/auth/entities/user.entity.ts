@@ -1,5 +1,12 @@
-import { Entity, PrimaryGeneratedColumn, Column, Unique } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  Unique,
+  OneToMany,
+} from 'typeorm';
 import { AgentTier } from '../enum/agent-tier.enum';
+import { RefreshToken } from './refresh-token.entity';
 
 /**
  * Represents a Pharmacy or an Agent in the PharmaB2B system.
@@ -38,4 +45,7 @@ export class User {
   /** Has the user verified the e‑mail address? */
   @Column({ default: false })
   isVerified: boolean;
+
+  @OneToMany(() => RefreshToken, (rt) => rt.user, { cascade: true })
+  refreshTokens: RefreshToken[];
 }
