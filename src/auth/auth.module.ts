@@ -28,6 +28,6 @@ import { TierGuard } from './tier.guard';
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtStrategy, JwtAuthGuard, TierGuard],
-  exports: [AuthService],
+  exports: [AuthService, TierGuard],
 })
 export class AuthModule {}
