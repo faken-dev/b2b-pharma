@@ -15,6 +15,11 @@ import { AuthService } from './auth.service';
 import { VerifyEmailDto } from './dto/verify-email.dto';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { JwtAuthGuard } from './jwt-auth.guard';
+import { AgentTier } from './enum/agent-tier.enum';
+import { Tier } from './tier.decorator';
+import { TierGuard } from './tier.guard';
+import { LogoutDto } from './dto/logout.dto';
+import { RefreshTokenDto } from './dto/refresh-token.dto';
 
 @ApiTags('auth')
 @Controller('auth')
@@ -86,5 +91,19 @@ export class AuthController {
   getProfile(@Request() req) {
     // The JwtStrategy placed the user object on req.user
     return req.user;
+  }
+
+  /**
+   * Example endpoint – only GOLD tier can access.
+   * In a real B2B system this could return premium pricing data.
+   */
+  @Get('premium-data')
+  @UseGuards(JwtAuthGuard, TierGuard) // both JWT + tier guard
+  @Tier(AgentTier.GOLD)
+  @ApiOperation({ summary: 'Get premium data (GOLD tier only)' })
+  getPremiumData(@Request() req) {
+    return {
+      message: `Welcome, ${req.user.pharmacyName}! Here is your premium data.`,
+    };
   }
 }
