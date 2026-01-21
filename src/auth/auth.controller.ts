@@ -106,4 +106,26 @@ export class AuthController {
       message: `Welcome, ${req.user.pharmacyName}! Here is your premium data.`,
     };
   }
+
+  /**
+   * Refresh access token using a valid refresh token.
+   * Returns a new pair { accessToken, refreshToken }.
+   */
+  @Post('refresh')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Refresh JWT pair using a refresh token' })
+  refresh(@Body() dto: RefreshTokenDto) {
+    return this.authService.refreshTokens(dto);
+  }
+
+  /**
+   * Log out by revoking the supplied refresh token.
+   * The client should delete its stored tokens after a successful call.
+   */
+  @Post('logout')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Logout – invalidate a refresh token' })
+  logout(@Body() dto: LogoutDto) {
+    return this.authService.logout(dto);
+  }
 }
