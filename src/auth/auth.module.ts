@@ -11,10 +11,11 @@ import { JwtAuthGuard } from './jwt-auth.guard';
 import { PassportModule } from '@nestjs/passport';
 import { RefreshToken } from './entities/refresh-token.entity';
 import { TierGuard } from './tier.guard';
+import { PasswordResetToken } from './entities/password-reset-token.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([User, RefreshToken]),
+    TypeOrmModule.forFeature([User, RefreshToken, PasswordResetToken]),
     NotificationModule,
     ConfigModule,
     PassportModule.register({ defaultStrategy: 'jwt' }),
