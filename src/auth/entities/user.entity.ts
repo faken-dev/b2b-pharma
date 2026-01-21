@@ -7,6 +7,7 @@ import {
 } from 'typeorm';
 import { AgentTier } from '../enum/agent-tier.enum';
 import { RefreshToken } from './refresh-token.entity';
+import { Role } from '../enum/role.enum';
 
 /**
  * Represents a Pharmacy or an Agent in the PharmaB2B system.
@@ -46,6 +47,15 @@ export class User {
   @Column({ default: false })
   isVerified: boolean;
 
+  /** Refresh tokens issued to this user */
   @OneToMany(() => RefreshToken, (rt) => rt.user, { cascade: true })
   refreshTokens: RefreshToken[];
+
+  /** Role of the account – default USER */
+  @Column({
+    type: 'enum',
+    enum: Role,
+    default: Role.USER,
+  })
+  role: Role;
 }
