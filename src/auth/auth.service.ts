@@ -11,7 +11,12 @@ import { InjectRepository } from '@nestjs/typeorm';
 import * as bcrypt from 'bcrypt';
 import { NotificationService } from '../notification/notification.service';
 import { JwtService } from '@nestjs/jwt';
-import { JwtPayload } from './jwt.payload.interface';
+import ms from 'ms';
+import { RefreshToken } from './entities/refresh-token.entity';
+import { randomBytes } from 'crypto';
+import { ConfigService } from '@nestjs/config';
+import { RefreshTokenDto } from './dto/refresh-token.dto';
+import { LogoutDto } from './dto/logout.dto';
 
 @Injectable()
 export class AuthService {
@@ -22,6 +27,9 @@ export class AuthService {
     private readonly userRepo: Repository<User>,
     private readonly notificationService: NotificationService,
     private readonly jwtService: JwtService,
+    @InjectRepository(RefreshToken)
+    private readonly refreshTokenRepo: Repository<RefreshToken>,
+    private readonly configService: ConfigService,
   ) {}
 
   /**
@@ -156,17 +164,130 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    const payload: JwtPayload = {
-      sub: user.id,
-      email: user.email,
-    };
+    // const payload: JwtPayload = {
+    //   sub: user.id,
+    //   email: user.email,
+    // };
 
+    // const accessToken = await this.jwtService.signAsync(payload, {
+    //   expiresIn: '1h',
+    // });
+
+    this.logger.log(`User ${email} logged in successfully`);
+
+    return this.generateTokens(user);
+  }
+
+  private async hashRefreshToken(token: string): Promise<string> {
+    // bcrypt default of 10 rounds
+    return bcrypt.hash(token, 10);
+  }
+  /**
+   * Creates a new refresh token row in DB, returns the **plain** token.
+   * The token is NOT stored in plain text – only its bcrypt hash is persisted.
+   */
+  private async createRefreshToken(user: User): Promise<string> {
+    const rawToken = randomBytes(40).toString('hex');
+    const tokenHash = await this.hashRefreshToken(rawToken);
+
+    const expiresInStr = (this.configService.get<string>(
+      'REFRESH_TOKEN_EXPIRES_IN',
+    ) ?? '7d') as ms.StringValue;
+    const expiresAt = new Date(Date.now() + ms(expiresInStr));
+
+    const refreshEntity = this.refreshTokenRepo.create({
+      tokenHash,
+      expiresAt,
+      user,
+      revoked: false,
+    });
+
+    await this.refreshTokenRepo.save(refreshEntity);
+    return rawToken;
+  }
+
+  private async generateTokens(user: User) {
+    const payload = { sub: user.id, email: user.email };
     const accessToken = await this.jwtService.signAsync(payload, {
       expiresIn: '1h',
     });
 
-    this.logger.log(`User ${email} logged in successfully`);
+    const refreshToken = await this.createRefreshToken(user);
 
-    return { accessToken };
+    return { accessToken, refreshToken };
+  }
+
+  /**
+   * Revoke a specific refresh token (Logout).
+   * * @param dto LogoutDto containing the raw refresh token to invalidate.
+   * @returns A success message even if the token was not found (silent fail for security).
+   */
+  async logout(dto: LogoutDto) {
+    const { refreshToken } = dto;
+
+    // Find all active (non-revoked) tokens from the database.
+    const storedTokens = await this.refreshTokenRepo.find({
+      where: { revoked: false },
+      relations: ['user'],
+    });
+
+    // Compare the provided plain token with stored bcrypt hashes.
+    const matching = await Promise.all(
+      storedTokens.map(async (rt) => {
+        const isMatch = await bcrypt.compare(refreshToken, rt.tokenHash);
+        return isMatch ? rt : null;
+      }),
+    );
+
+    const refreshEntity = matching.find((rt) => rt !== null);
+
+    // If found, flip the revoked flag to true to invalidate the session.
+    if (refreshEntity) {
+      refreshEntity.revoked = true;
+      await this.refreshTokenRepo.save(refreshEntity);
+      this.logger.log(
+        `User ${refreshEntity.user.email} logged out successfully`,
+      );
+    }
+
+    return { message: 'Logged out successfully' };
+  }
+
+  /**
+   * Exchange a valid refresh token for a new pair of tokens (Access + Refresh).
+   * This implements "Refresh Token Rotation" for enhanced security.
+   * * @param dto RefreshTokenDto containing the current refresh token.
+   * @throws UnauthorizedException if token is invalid, revoked, or expired.
+   */
+  async refreshTokens(dto: RefreshTokenDto) {
+    const { refreshToken } = dto;
+
+    // Identify the token by comparing bcrypt hashes.
+    const storedTokens = await this.refreshTokenRepo.find({
+      where: { revoked: false },
+      relations: ['user'],
+    });
+
+    const matching = await Promise.all(
+      storedTokens.map(async (rt) => {
+        const isMatch = await bcrypt.compare(refreshToken, rt.tokenHash);
+        return isMatch ? rt : null;
+      }),
+    );
+
+    const refreshEntity = matching.find((rt) => rt !== null);
+
+    // Validation: Check if token exists and is not expired.
+    if (!refreshEntity || refreshEntity.expiresAt < new Date()) {
+      this.logger.warn('Refresh attempt with invalid or expired token');
+      throw new UnauthorizedException('Invalid or expired refresh token');
+    }
+
+    // Rotation: Revoke the used token and issue a fresh pair.
+    refreshEntity.revoked = true;
+    await this.refreshTokenRepo.save(refreshEntity);
+
+    this.logger.log(`Tokens rotated for user: ${refreshEntity.user.email}`);
+    return this.generateTokens(refreshEntity.user);
   }
 }
