@@ -5,6 +5,12 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { RegisterDto } from './dto/register.dto';
+import { LoginDto } from './dto/login.dto';
+import { RefreshTokenDto } from './dto/refresh-token.dto';
+import { LogoutDto } from './dto/logout.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
+import { PasswordResetToken } from './entities/password-reset-token.entity';
 import { Repository } from 'typeorm';
 import { User } from './entities/user.entity';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -15,8 +21,6 @@ import ms from 'ms';
 import { RefreshToken } from './entities/refresh-token.entity';
 import { randomBytes } from 'crypto';
 import { ConfigService } from '@nestjs/config';
-import { RefreshTokenDto } from './dto/refresh-token.dto';
-import { LogoutDto } from './dto/logout.dto';
 
 @Injectable()
 export class AuthService {
@@ -30,8 +34,114 @@ export class AuthService {
     @InjectRepository(RefreshToken)
     private readonly refreshTokenRepo: Repository<RefreshToken>,
     private readonly configService: ConfigService,
+    @InjectRepository(PasswordResetToken)
+    private readonly resetTokenRepo: Repository<PasswordResetToken>,
   ) {}
 
+  // ------------------------------------------------------------------------
+  // -------------------------- HELPERS ------------------------------------
+  // ------------------------------------------------------------------------
+  /** ----------- Bcrypt helpers ----------- */
+  private async hashPassword(password: string): Promise<string> {
+    return bcrypt.hash(password, 10);
+  }
+
+  /** ---------- Compare a plain password against a bcrypt hash ----------- */
+  private async comparePassword(plain: string, hash: string): Promise<boolean> {
+    return bcrypt.compare(plain, hash);
+  }
+
+  /** ---------- Helper to generate access + refresh ---------- */
+  private async generateTokens(user: User) {
+    const payload = { sub: user.id, email: user.email };
+    const accessToken = await this.jwtService.signAsync(payload, {
+      expiresIn: '1h',
+    });
+
+    const refreshToken = await this.createRefreshToken(user);
+
+    return { accessToken, refreshToken };
+  }
+
+  /** ----------- Refresh‑token helpers (already existed) ----------- */
+  private async hashRefreshToken(token: string): Promise<string> {
+    // bcrypt default of 10 rounds
+    return bcrypt.hash(token, 10);
+  }
+  /**
+   * Creates a new refresh token row in DB, returns the **plain** token.
+   * The token is NOT stored in plain text – only its bcrypt hash is persisted.
+   */
+  private async createRefreshToken(user: User): Promise<string> {
+    const rawToken = randomBytes(40).toString('hex');
+    const tokenHash = await this.hashRefreshToken(rawToken);
+
+    const expiresInStr = (this.configService.get<string>(
+      'REFRESH_TOKEN_EXPIRES_IN',
+    ) ?? '7d') as ms.StringValue;
+    const expiresAt = new Date(Date.now() + ms(expiresInStr));
+
+    const refreshEntity = this.refreshTokenRepo.create({
+      tokenHash,
+      expiresAt,
+      user,
+      revoked: false,
+    });
+
+    await this.refreshTokenRepo.save(refreshEntity);
+    return rawToken;
+  }
+
+  /** ----------- Password‑reset helpers ----------- */
+  private async hashResetToken(token: string): Promise<string> {
+    return bcrypt.hash(token, 10);
+  }
+
+  /** Create a fresh reset token, persist its hash, and return the plain token */
+  private async createResetToken(user: User): Promise<string> {
+    const rawToken = randomBytes(40).toString('hex');
+    const tokenHash = await this.hashResetToken(rawToken);
+    const expiresIn = (this.configService.get<string>(
+      'PASSWORD_RESET_EXPIRES_IN',
+    ) ?? '30m') as ms.StringValue;
+    const expiresAt = new Date(Date.now() + ms(expiresIn));
+
+    const entity = this.resetTokenRepo.create({
+      tokenHash,
+      expiresAt,
+      used: false,
+      user,
+    });
+
+    await this.resetTokenRepo.save(entity);
+    return rawToken;
+  }
+
+  /** Send the reset e‑mail using the existing NotificationService */
+  private async sendResetEmail(email: string, token: string) {
+    const frontUrl =
+      this.configService.get<string>('FRONTEND_RESET_URL') ??
+      'http://localhost:3000/reset-password';
+    const resetLink = `${frontUrl}?token=${encodeURIComponent(token)}`;
+
+    const subject = 'PharmaB2B – Password Reset Request';
+    const html = `
+      <p>Hello,</p>
+      <p>We received a request to reset the password for your PharmaB2B account.</p>
+      <p>Please click the button below (or copy the link) to set a new password. This link will expire in ${this.configService.get<string>('PASSWORD_RESET_EXPIRES_IN') ?? '30m'}.</p>
+      <a href="${resetLink}"
+         style="display:inline-block;padding:10px 20px;background:#28a745;color:#fff;text-decoration:none;border-radius:5px;">
+        Reset Password
+      </a>
+      <p>If you did not request a password reset, you can ignore this e‑mail.</p>
+    `;
+
+    await this.notificationService.sendCustomEmail(email, subject, html);
+  }
+
+  // ------------------------------------------------------------------------
+  // -------------------------- PUBLIC API ----------------------------------
+  // ------------------------------------------------------------------------
   /**
    * Register a new pharmacy/agent.
    * – Throws BadRequestException if e‑mail already exists.
@@ -142,79 +252,35 @@ export class AuthService {
    * Returns an object `{ accessToken: string }` that will be wrapped
    * by the global TransformInterceptor.
    */
-  async login(email: string, plainPassword: string) {
+  async login(dto: LoginDto) {
     const user = await this.userRepo.findOne({
-      where: { email },
+      where: { email: dto.email },
     });
 
     if (!user) {
-      this.logger.warn(`Login attempt with unknown e-mail: ${email}`);
+      this.logger.warn(`Login attempt with unknown e-mail: ${dto.email}`);
       throw new UnauthorizedException('Invalid credentials');
     }
 
     if (!user.isVerified) {
-      this.logger.warn(`Login attempt for unverified account: ${email}`);
+      this.logger.warn(`Login attempt for unverified account: ${dto.email}`);
       throw new UnauthorizedException('Account not verified');
     }
 
-    const passwordMatches = await bcrypt.compare(plainPassword, user.password);
+    const passwordMatches = await this.comparePassword(
+      dto.password,
+      user.password,
+    );
 
     if (!passwordMatches) {
-      this.logger.warn(`Invalid password for e-mail: ${email}`);
+      this.logger.warn(`Invalid password for e-mail: ${dto.email}`);
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    // const payload: JwtPayload = {
-    //   sub: user.id,
-    //   email: user.email,
-    // };
+    this.logger.log(`User ${dto.email} logged in successfully`);
 
-    // const accessToken = await this.jwtService.signAsync(payload, {
-    //   expiresIn: '1h',
-    // });
-
-    this.logger.log(`User ${email} logged in successfully`);
-
-    return this.generateTokens(user);
-  }
-
-  private async hashRefreshToken(token: string): Promise<string> {
-    // bcrypt default of 10 rounds
-    return bcrypt.hash(token, 10);
-  }
-  /**
-   * Creates a new refresh token row in DB, returns the **plain** token.
-   * The token is NOT stored in plain text – only its bcrypt hash is persisted.
-   */
-  private async createRefreshToken(user: User): Promise<string> {
-    const rawToken = randomBytes(40).toString('hex');
-    const tokenHash = await this.hashRefreshToken(rawToken);
-
-    const expiresInStr = (this.configService.get<string>(
-      'REFRESH_TOKEN_EXPIRES_IN',
-    ) ?? '7d') as ms.StringValue;
-    const expiresAt = new Date(Date.now() + ms(expiresInStr));
-
-    const refreshEntity = this.refreshTokenRepo.create({
-      tokenHash,
-      expiresAt,
-      user,
-      revoked: false,
-    });
-
-    await this.refreshTokenRepo.save(refreshEntity);
-    return rawToken;
-  }
-
-  private async generateTokens(user: User) {
-    const payload = { sub: user.id, email: user.email };
-    const accessToken = await this.jwtService.signAsync(payload, {
-      expiresIn: '1h',
-    });
-
-    const refreshToken = await this.createRefreshToken(user);
-
-    return { accessToken, refreshToken };
+    const tokens = await this.generateTokens(user);
+    return tokens;
   }
 
   /**
@@ -289,5 +355,68 @@ export class AuthService {
 
     this.logger.log(`Tokens rotated for user: ${refreshEntity.user.email}`);
     return this.generateTokens(refreshEntity.user);
+  }
+
+  /**
+   * Request a password reset for a user.
+   * @param dto ForgotPasswordDto containing the user's email.
+   * @returns A success message even if the e‑mail does not exist (for security).
+   */
+  async requestPasswordReset(dto: ForgotPasswordDto) {
+    const { email } = dto;
+    const user = await this.userRepo.findOne({ where: { email } });
+    if (!user) {
+      // Do *not* reveal that the e‑mail does not exist – just pretend we sent.
+      this.logger.warn(`Password‑reset requested for unknown e‑mail: ${email}`);
+      return { message: 'Sent email successfully' };
+    }
+
+    const rawToken = await this.createResetToken(user);
+    await this.sendResetEmail(user.email, rawToken);
+    this.logger.log(`Password‑reset e‑mail sent to ${email}`);
+    return { message: 'Sent email successfully' };
+  }
+
+  /**
+   * Reset the user's password using a valid reset token.
+   * @param dto ResetPasswordDto containing the reset token and new password.
+   * @throws BadRequestException if token is invalid, expired, or already used.
+   */
+  async resetPassword(dto: ResetPasswordDto) {
+    const { token, newPassword } = dto;
+
+    // Find *all* non‑revoked, non‑used reset tokens (we’ll compare hashes)
+    const allTokens = await this.resetTokenRepo.find({
+      where: { used: false },
+      relations: ['user'],
+    });
+
+    // Locate the matching token (bcrypt compare)
+    const match = await Promise.all(
+      allTokens.map(async (rt) => {
+        const ok = await bcrypt.compare(token, rt.tokenHash);
+        return ok ? rt : null;
+      }),
+    );
+
+    const resetEntity = match.find((rt) => rt !== null);
+    if (!resetEntity) {
+      throw new BadRequestException('Invalid or expired reset token');
+    }
+
+    if (resetEntity.expiresAt < new Date()) {
+      throw new BadRequestException('Reset token has expired');
+    }
+
+    // All good – hash the new password, store it, and mark the token used.
+    const hashedPw = await this.hashPassword(newPassword);
+    resetEntity.user.password = hashedPw;
+    await this.userRepo.save(resetEntity.user);
+
+    resetEntity.used = true;
+    await this.resetTokenRepo.save(resetEntity);
+
+    this.logger.log(`Password reset successful for ${resetEntity.user.email}`);
+    return { message: 'Password has been reset successfully' };
   }
 }
