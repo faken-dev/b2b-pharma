@@ -20,6 +20,8 @@ import { Tier } from './tier.decorator';
 import { TierGuard } from './tier.guard';
 import { LogoutDto } from './dto/logout.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
 
 @ApiTags('auth')
 @Controller('auth')
@@ -75,7 +77,7 @@ export class AuthController {
     description: 'Invalid credentials or unverified account',
   })
   async login(@Body() loginDto: LoginDto) {
-    return this.authService.login(loginDto.email, loginDto.password);
+    return this.authService.login(loginDto);
   }
 
   /**
@@ -127,5 +129,27 @@ export class AuthController {
   @ApiOperation({ summary: 'Logout – invalidate a refresh token' })
   logout(@Body() dto: LogoutDto) {
     return this.authService.logout(dto);
+  }
+
+  /**
+   * POST /auth/forgot-password
+   * Fires a password‑reset e‑mail (if the address exists).
+   */
+  @Post('forgot-password')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Request a password‑reset link via e‑mail' })
+  async forgotPassword(@Body() dto: ForgotPasswordDto) {
+    return this.authService.requestPasswordReset(dto);
+  }
+
+  /**
+   * POST /auth/reset-password
+   * Consumes the token from the e‑mail and sets a new password.
+   */
+  @Post('reset-password')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Reset password using token from e‑mail' })
+  async resetPassword(@Body() dto: ResetPasswordDto) {
+    return this.authService.resetPassword(dto);
   }
 }
