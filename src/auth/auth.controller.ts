@@ -25,9 +25,11 @@ import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { AuthGuard } from '@nestjs/passport';
+import { SetPasswordDto } from './dto/set-password.dto';
+import { User } from './entities/user.entity';
 
 interface RequestWithUser extends Request {
-  user: any;
+  user: User;
 }
 
 @ApiTags('auth')
@@ -118,6 +120,18 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   async resetPassword(@Body() dto: ResetPasswordDto) {
     return this.authService.resetPassword(dto);
+  }
+
+  /**
+   * POST /auth/set-password
+   * Allows a logged‑in social user to set a local password.
+   * After this call the account’s authProvider becomes LOCAL.
+   */
+  @UseGuards(JwtAuthGuard)
+  @Post('set-password')
+  @HttpCode(HttpStatus.OK)
+  async setPassword(@Req() req: RequestWithUser, @Body() dto: SetPasswordDto) {
+    return this.authService.setPasswordForOAuthUser(req.user, dto.newPassword);
   }
 
   // ======================================================
