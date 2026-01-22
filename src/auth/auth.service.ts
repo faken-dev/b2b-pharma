@@ -32,153 +32,22 @@ export class AuthService {
   constructor(
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
-    private readonly notificationService: NotificationService,
-    private readonly jwtService: JwtService,
+
     @InjectRepository(RefreshToken)
     private readonly refreshTokenRepo: Repository<RefreshToken>,
-    private readonly configService: ConfigService,
+
     @InjectRepository(PasswordResetToken)
     private readonly resetTokenRepo: Repository<PasswordResetToken>,
+
+    private readonly jwtService: JwtService,
+    private readonly configService: ConfigService,
+    private readonly notificationService: NotificationService,
   ) {}
 
-  // ------------------------------------------------------------------------
-  // -------------------------- HELPERS ------------------------------------
-  // ------------------------------------------------------------------------
+  // ========================================================================
+  // AUTHENTICATION FLOW
+  // ========================================================================
 
-  /**
-   * Find a user by e‑mail (used by OAuth strategies).
-   * Returns `null` if not found.
-   */
-  async findByEmail(email: string): Promise<User | null> {
-    return this.userRepo.findOne({ where: { email } });
-  }
-  /** ----------- Bcrypt helpers ----------- */
-  private async hashPassword(password: string): Promise<string> {
-    return bcrypt.hash(password, 10);
-  }
-
-  /** ---------- Compare a plain password against a bcrypt hash ----------- */
-  private async comparePassword(plain: string, hash: string): Promise<boolean> {
-    return bcrypt.compare(plain, hash);
-  }
-
-  /** ---------- Helper to generate access + refresh ---------- */
-  private async generateTokens(user: User) {
-    const payload = { sub: user.id, email: user.email };
-    const accessToken = await this.jwtService.signAsync(payload, {
-      expiresIn: '1h',
-    });
-
-    const refreshToken = await this.createRefreshToken(user);
-
-    return { accessToken, refreshToken };
-  }
-
-  /** ----------- Refresh‑token helpers (already existed) ----------- */
-  private async hashRefreshToken(token: string): Promise<string> {
-    // bcrypt default of 10 rounds
-    return bcrypt.hash(token, 10);
-  }
-  /**
-   * Creates a new refresh token row in DB, returns the **plain** token.
-   * The token is NOT stored in plain text – only its bcrypt hash is persisted.
-   */
-  private async createRefreshToken(user: User): Promise<string> {
-    const rawToken = randomBytes(40).toString('hex');
-    const tokenHash = await this.hashRefreshToken(rawToken);
-
-    const expiresInStr = (this.configService.get<string>(
-      'REFRESH_TOKEN_EXPIRES_IN',
-    ) ?? '7d') as ms.StringValue;
-    const expiresAt = new Date(Date.now() + ms(expiresInStr));
-
-    const refreshEntity = this.refreshTokenRepo.create({
-      tokenHash,
-      expiresAt,
-      user,
-      revoked: false,
-    });
-
-    await this.refreshTokenRepo.save(refreshEntity);
-    return rawToken;
-  }
-
-  /** ----------- Password‑reset helpers ----------- */
-  private async hashResetToken(token: string): Promise<string> {
-    return bcrypt.hash(token, 10);
-  }
-
-  /** Create a fresh reset token, persist its hash, and return the plain token */
-  private async createResetToken(user: User): Promise<string> {
-    const rawToken = randomBytes(40).toString('hex');
-    const tokenHash = await this.hashResetToken(rawToken);
-    const expiresIn = (this.configService.get<string>(
-      'PASSWORD_RESET_EXPIRES_IN',
-    ) ?? '30m') as ms.StringValue;
-    const expiresAt = new Date(Date.now() + ms(expiresIn));
-
-    const entity = this.resetTokenRepo.create({
-      tokenHash,
-      expiresAt,
-      used: false,
-      user,
-    });
-
-    await this.resetTokenRepo.save(entity);
-    return rawToken;
-  }
-
-  /** Send the reset e‑mail using the existing NotificationService */
-  private async sendResetEmail(email: string, token: string) {
-    const frontUrl =
-      this.configService.get<string>('FRONTEND_RESET_URL') ??
-      'http://localhost:3000/reset-password';
-    const resetLink = `${frontUrl}?token=${encodeURIComponent(token)}`;
-
-    const subject = 'PharmaB2B – Password Reset Request';
-    const html = `
-      <p>Hello,</p>
-      <p>We received a request to reset the password for your PharmaB2B account.</p>
-      <p>Please click the button below (or copy the link) to set a new password. This link will expire in ${this.configService.get<string>('PASSWORD_RESET_EXPIRES_IN') ?? '30m'}.</p>
-      <a href="${resetLink}"
-         style="display:inline-block;padding:10px 20px;background:#28a745;color:#fff;text-decoration:none;border-radius:5px;">
-        Reset Password
-      </a>
-      <p>If you did not request a password reset, you can ignore this e‑mail.</p>
-    `;
-
-    await this.notificationService.sendCustomEmail(email, subject, html);
-  }
-
-  /**
-   * Persist a new user that originated from an OAuth provider.
-   * No password is stored – `password` stays null.
-   * The account is automatically marked as verified because the provider
-   * already verified the e‑mail address.
-   */
-  async createUserFromOAuth(dto: OAuthUserDto): Promise<User> {
-    const randomPassword = randomBytes(32).toString('hex');
-    const passwordHash = await bcrypt.hash(randomPassword, 12);
-
-    const user = this.userRepo.create({
-      email: dto.email,
-      password: passwordHash, // ⚠️ không bao giờ null
-      pharmacyName: dto.pharmacyName,
-      businessLicense: 'UNSET',
-      role: Role.USER,
-      authProvider: dto.provider,
-      providerId: dto.providerId,
-      isVerified: true,
-    });
-
-    const saved = await this.userRepo.save(user);
-    this.logger.log(`Created new ${dto.provider} user → ${dto.email}`);
-    return saved;
-  }
-
-  // ------------------------------------------------------------------------
-  // -------------------------- PUBLIC API ----------------------------------
-  // ------------------------------------------------------------------------
   /**
    * Register a new pharmacy/agent.
    * – Throws BadRequestException if e‑mail already exists.
@@ -195,7 +64,7 @@ export class AuthService {
     }
 
     // Hash the password (bcrypt, cost = 10)
-    const hashedPassword = await bcrypt.hash(dto.password, 10);
+    const hashedPassword = await this.hashPassword(dto.password);
 
     // Create & persist the user (agentTier defaults to BRONZE, isVerified false)
     const newUser = this.userRepo.create({
@@ -362,6 +231,10 @@ export class AuthService {
     return { message: 'Logged out successfully' };
   }
 
+  // ========================================================================
+  // TOKEN MANAGEMENT
+  // ========================================================================
+
   /**
    * Exchange a valid refresh token for a new pair of tokens (Access + Refresh).
    * This implements "Refresh Token Rotation" for enhanced security.
@@ -401,6 +274,18 @@ export class AuthService {
   }
 
   /**
+   * Issue access + refresh tokens for a given user.
+   * Used by both login and OAuth flows.
+   */
+  async issueTokens(user: User) {
+    return this.generateTokens(user);
+  }
+
+  // ========================================================================
+  // PASSWORD RESET FLOW
+  // ========================================================================
+
+  /**
    * Request a password reset for a user.
    * @param dto ForgotPasswordDto containing the user's email.
    * @returns A success message even if the e‑mail does not exist (for security).
@@ -428,7 +313,7 @@ export class AuthService {
   async resetPassword(dto: ResetPasswordDto) {
     const { token, newPassword } = dto;
 
-    // Find *all* non‑revoked, non‑used reset tokens (we’ll compare hashes)
+    // Find *all* non‑revoked, non‑used reset tokens (we'll compare hashes)
     const allTokens = await this.resetTokenRepo.find({
       where: { used: false },
       relations: ['user'],
@@ -461,5 +346,172 @@ export class AuthService {
 
     this.logger.log(`Password reset successful for ${resetEntity.user.email}`);
     return { message: 'Password has been reset successfully' };
+  }
+
+  // ========================================================================
+  // OAUTH FLOW
+  // ========================================================================
+
+  /**
+   * Persist a new user that originated from an OAuth provider.
+   * No password is stored – `password` stays null.
+   * The account is automatically marked as verified because the provider
+   * already verified the e‑mail address.
+   */
+  async createUserFromOAuth(dto: OAuthUserDto): Promise<User> {
+    const randomPassword = randomBytes(32).toString('hex');
+    const passwordHash = await bcrypt.hash(randomPassword, 12);
+
+    const user = this.userRepo.create({
+      email: dto.email,
+      password: passwordHash,
+      pharmacyName: dto.pharmacyName,
+      businessLicense: 'UNSET',
+      role: Role.USER,
+      authProvider: dto.provider,
+      providerId: dto.providerId,
+      isVerified: true,
+    });
+
+    const saved = await this.userRepo.save(user);
+    this.logger.log(`Created new ${dto.provider} user → ${dto.email}`);
+    return saved;
+  }
+
+  /**
+   * Set password for OAuth user to allow local login.
+   */
+  async setPasswordForOAuthUser(user: User, newPassword: string) {
+    const hashed = await this.hashPassword(newPassword);
+
+    user.password = hashed;
+    user.authProvider = AuthProvider.LOCAL;
+
+    await this.userRepo.save(user);
+
+    this.logger.log(`Password set for OAuth user: ${user.email}`);
+
+    return { message: 'Password set successfully' };
+  }
+
+  // ========================================================================
+  // USER QUERIES
+  // ========================================================================
+
+  /**
+   * Find a user by e‑mail (used by OAuth strategies).
+   * Returns `null` if not found.
+   */
+  async findByEmail(email: string): Promise<User | null> {
+    return this.userRepo.findOne({ where: { email } });
+  }
+
+  // ========================================================================
+  // PRIVATE HELPERS - Password Hashing
+  // ========================================================================
+
+  private async hashPassword(password: string): Promise<string> {
+    return bcrypt.hash(password, 10);
+  }
+
+  private async comparePassword(plain: string, hash: string): Promise<boolean> {
+    return bcrypt.compare(plain, hash);
+  }
+
+  // ========================================================================
+  // PRIVATE HELPERS - Token Generation
+  // ========================================================================
+
+  private async generateTokens(user: User) {
+    const payload = { sub: user.id, email: user.email };
+    const accessToken = await this.jwtService.signAsync(payload, {
+      expiresIn: '1h',
+    });
+
+    const refreshToken = await this.createRefreshToken(user);
+
+    return { accessToken, refreshToken };
+  }
+
+  private async hashRefreshToken(token: string): Promise<string> {
+    return bcrypt.hash(token, 10);
+  }
+
+  /**
+   * Creates a new refresh token row in DB, returns the **plain** token.
+   * The token is NOT stored in plain text – only its bcrypt hash is persisted.
+   */
+  private async createRefreshToken(user: User): Promise<string> {
+    const rawToken = randomBytes(40).toString('hex');
+    const tokenHash = await this.hashRefreshToken(rawToken);
+
+    const expiresInStr = (this.configService.get<string>(
+      'REFRESH_TOKEN_EXPIRES_IN',
+    ) ?? '7d') as ms.StringValue;
+    const expiresAt = new Date(Date.now() + ms(expiresInStr));
+
+    const refreshEntity = this.refreshTokenRepo.create({
+      tokenHash,
+      expiresAt,
+      user,
+      revoked: false,
+    });
+
+    await this.refreshTokenRepo.save(refreshEntity);
+    return rawToken;
+  }
+
+  // ========================================================================
+  // PRIVATE HELPERS - Password Reset
+  // ========================================================================
+
+  private async hashResetToken(token: string): Promise<string> {
+    return bcrypt.hash(token, 10);
+  }
+
+  /**
+   * Create a fresh reset token, persist its hash, and return the plain token.
+   */
+  private async createResetToken(user: User): Promise<string> {
+    const rawToken = randomBytes(40).toString('hex');
+    const tokenHash = await this.hashResetToken(rawToken);
+    const expiresIn = (this.configService.get<string>(
+      'PASSWORD_RESET_EXPIRES_IN',
+    ) ?? '30m') as ms.StringValue;
+    const expiresAt = new Date(Date.now() + ms(expiresIn));
+
+    const entity = this.resetTokenRepo.create({
+      tokenHash,
+      expiresAt,
+      used: false,
+      user,
+    });
+
+    await this.resetTokenRepo.save(entity);
+    return rawToken;
+  }
+
+  /**
+   * Send the reset e‑mail using the existing NotificationService.
+   */
+  private async sendResetEmail(email: string, token: string) {
+    const frontUrl =
+      this.configService.get<string>('FRONTEND_RESET_URL') ??
+      'http://localhost:3000/reset-password';
+    const resetLink = `${frontUrl}?token=${encodeURIComponent(token)}`;
+
+    const subject = 'PharmaB2B – Password Reset Request';
+    const html = `
+      <p>Hello,</p>
+      <p>We received a request to reset the password for your PharmaB2B account.</p>
+      <p>Please click the button below (or copy the link) to set a new password. This link will expire in ${this.configService.get<string>('PASSWORD_RESET_EXPIRES_IN') ?? '30m'}.</p>
+      <a href="${resetLink}"
+         style="display:inline-block;padding:10px 20px;background:#28a745;color:#fff;text-decoration:none;border-radius:5px;">
+        Reset Password
+      </a>
+      <p>If you did not request a password reset, you can ignore this e‑mail.</p>
+    `;
+
+    await this.notificationService.sendCustomEmail(email, subject, html);
   }
 }
