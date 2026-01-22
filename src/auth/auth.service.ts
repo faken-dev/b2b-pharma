@@ -21,6 +21,9 @@ import ms from 'ms';
 import { RefreshToken } from './entities/refresh-token.entity';
 import { randomBytes } from 'crypto';
 import { ConfigService } from '@nestjs/config';
+import { OAuthUserDto } from './dto/oauth-user.dto';
+import { AuthProvider } from './enum/auth-provider.enum';
+import { Role } from './enum/role.enum';
 
 @Injectable()
 export class AuthService {
@@ -41,6 +44,14 @@ export class AuthService {
   // ------------------------------------------------------------------------
   // -------------------------- HELPERS ------------------------------------
   // ------------------------------------------------------------------------
+
+  /**
+   * Find a user by e‑mail (used by OAuth strategies).
+   * Returns `null` if not found.
+   */
+  async findByEmail(email: string): Promise<User | null> {
+    return this.userRepo.findOne({ where: { email } });
+  }
   /** ----------- Bcrypt helpers ----------- */
   private async hashPassword(password: string): Promise<string> {
     return bcrypt.hash(password, 10);
@@ -137,6 +148,32 @@ export class AuthService {
     `;
 
     await this.notificationService.sendCustomEmail(email, subject, html);
+  }
+
+  /**
+   * Persist a new user that originated from an OAuth provider.
+   * No password is stored – `password` stays null.
+   * The account is automatically marked as verified because the provider
+   * already verified the e‑mail address.
+   */
+  async createUserFromOAuth(dto: OAuthUserDto): Promise<User> {
+    const randomPassword = randomBytes(32).toString('hex');
+    const passwordHash = await bcrypt.hash(randomPassword, 12);
+
+    const user = this.userRepo.create({
+      email: dto.email,
+      password: passwordHash, // ⚠️ không bao giờ null
+      pharmacyName: dto.pharmacyName,
+      businessLicense: 'UNSET',
+      role: Role.USER,
+      authProvider: dto.provider,
+      providerId: dto.providerId,
+      isVerified: true,
+    });
+
+    const saved = await this.userRepo.save(user);
+    this.logger.log(`Created new ${dto.provider} user → ${dto.email}`);
+    return saved;
   }
 
   // ------------------------------------------------------------------------
@@ -260,6 +297,12 @@ export class AuthService {
     if (!user) {
       this.logger.warn(`Login attempt with unknown e-mail: ${dto.email}`);
       throw new UnauthorizedException('Invalid credentials');
+    }
+
+    if (user.authProvider !== AuthProvider.LOCAL) {
+      throw new UnauthorizedException(
+        'Please log in using the provider you originally used (Google / Facebook) or set a password first.',
+      );
     }
 
     if (!user.isVerified) {
