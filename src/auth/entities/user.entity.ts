@@ -8,6 +8,8 @@ import {
 import { AgentTier } from '../enum/agent-tier.enum';
 import { RefreshToken } from './refresh-token.entity';
 import { Role } from '../enum/role.enum';
+import { AuthProvider } from '../enum/auth-provider.enum';
+import { PasswordResetToken } from './password-reset-token.entity';
 
 /**
  * Represents a Pharmacy or an Agent in the PharmaB2B system.
@@ -47,10 +49,6 @@ export class User {
   @Column({ default: false })
   isVerified: boolean;
 
-  /** Refresh tokens issued to this user */
-  @OneToMany(() => RefreshToken, (rt) => rt.user, { cascade: true })
-  refreshTokens: RefreshToken[];
-
   /** Role of the account – default USER */
   @Column({
     type: 'enum',
@@ -58,4 +56,32 @@ export class User {
     default: Role.USER,
   })
   role: Role;
+
+  /** Authentication provider (LOCAL, GOOGLE, FACEBOOK) */
+  @Column({
+    type: 'enum',
+    enum: AuthProvider,
+    default: AuthProvider.LOCAL,
+  })
+  authProvider: AuthProvider;
+
+  /**
+   * Provider‑specific ID (e.g., Google `sub` or Facebook `id`).
+   * Null for LOCAL accounts.  Adding a unique index on this column + provider
+   * lets you quickly detect duplicate social accounts.
+   */
+  @Column({ type: 'varchar', nullable: true })
+  providerId?: string;
+
+  // ---------------------------------------------------------------------
+  // Relations
+  // ---------------------------------------------------------------------
+
+  /** Refresh tokens issued to this user */
+  @OneToMany(() => RefreshToken, (rt) => rt.user, { cascade: true })
+  refreshTokens: RefreshToken[];
+
+  /** Password reset tokens issued to this user */
+  @OneToMany(() => PasswordResetToken, (prt) => prt.user, { cascade: true })
+  passwordResetTokens: PasswordResetToken[];
 }
