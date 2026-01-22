@@ -5,9 +5,9 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { AgentTier } from './enum/agent-tier.enum';
+import { AgentTier } from '../enum/agent-tier.enum';
 import { Request } from 'express';
-import { User } from './entities/user.entity';
+import { User } from '../entities/user.entity';
 
 // Custom metadata key
 export const TIER_META_KEY = 'requiredTier';

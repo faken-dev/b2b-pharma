@@ -9,19 +9,15 @@ import {
   HttpStatus,
   BadRequestException,
 } from '@nestjs/common';
-import { JwtAuthGuard } from 'src/auth/jwt-auth.guard';
-import { Roles } from 'src/auth/guard/roles.decorator';
+import { JwtAuthGuard } from 'src/auth/guard/jwt-auth.guard';
+import { Roles } from 'src/auth/decorator/roles.decorator';
 import { RoleGuard } from 'src/auth/guard/role.guard';
 import { Role } from 'src/auth/enum/role.enum';
 import { User } from 'src/auth/entities/user.entity';
 import { Repository } from 'typeorm';
 import { InjectRepository } from '@nestjs/typeorm';
 import { UpdateTierDto } from './dto/update-tier.dto';
-import {
-  ApiTags,
-  ApiBearerAuth,
-  ApiOperation,
-} from '@nestjs/swagger';
+import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 
 @ApiTags('admin')
 @ApiBearerAuth()
