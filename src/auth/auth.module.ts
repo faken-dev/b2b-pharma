@@ -6,12 +6,14 @@ import { AuthController } from './auth.controller';
 import { NotificationModule } from '../notification/notification.module';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigService, ConfigModule } from '@nestjs/config';
-import { JwtStrategy } from './jwt.strategy';
+import { JwtStrategy } from './strategies/jwt.strategy';
 import { JwtAuthGuard } from './guard/jwt-auth.guard';
 import { PassportModule } from '@nestjs/passport';
 import { RefreshToken } from './entities/refresh-token.entity';
 import { TierGuard } from './guard/tier.guard';
 import { PasswordResetToken } from './entities/password-reset-token.entity';
+import { GoogleStrategy } from './strategies/google.strategy';
+import { FacebookStrategy } from './strategies/facebook.strategy';
 
 @Module({
   imports: [
@@ -28,7 +30,14 @@ import { PasswordResetToken } from './entities/password-reset-token.entity';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtStrategy, JwtAuthGuard, TierGuard],
+  providers: [
+    AuthService,
+    JwtStrategy,
+    JwtAuthGuard,
+    TierGuard,
+    GoogleStrategy,
+    FacebookStrategy,
+  ],
   exports: [AuthService, TierGuard],
 })
 export class AuthModule {}
