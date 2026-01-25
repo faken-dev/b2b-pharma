@@ -4,6 +4,7 @@ import {
   IsString,
   Length,
   Matches,
+  ValidateIf,
 } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 
@@ -11,9 +12,21 @@ import { ApiProperty } from '@nestjs/swagger';
  * All fields are validated before the controller method runs.
  */
 export class RegisterDto {
-  @ApiProperty({ example: 'pharmacy@example.com' })
+  @ApiProperty({
+    example: 'pharmacy@example.com',
+    required: false,
+  })
+  @ValidateIf((o: RegisterDto) => o.email !== undefined)
   @IsEmail({}, { message: 'Invalid e‑mail address' })
-  email: string;
+  email?: string;
+
+  @ApiProperty({
+    required: false,
+    example: '+84912345678',
+  })
+  @ValidateIf((o: RegisterDto) => o.phoneNumber !== undefined)
+  @IsString()
+  phoneNumber?: string;
 
   /**
    * Password rules (strong enough for a B2B system):
