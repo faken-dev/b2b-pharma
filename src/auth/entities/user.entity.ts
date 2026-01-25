@@ -17,18 +17,43 @@ import { PasswordResetToken } from './password-reset-token.entity';
  */
 @Entity('users')
 @Unique(['email'])
+@Unique(['username'])
+@Unique(['phoneNumber'])
 export class User {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  /** Login e‑mail – unique, required */
-  @Column({ length: 255 })
-  email: string;
+  /** E‑mail */
+  @Column({ length: 255, nullable: true })
+  email?: string;
+
+  /** Phone number in E.164 format */
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  phoneNumber?: string;
 
   /** Hashed password */
   @Column()
   password: string;
 
+  // -------------------------------------------------------------------------
+  // Verification flags
+  // -------------------------------------------------------------------------
+  /** Verified email */
+  @Column({ default: false })
+  emailVerified: boolean;
+
+  /** Verified phone number */
+  @Column({ default: false })
+  phoneVerified: boolean;
+
+  /** Derived – not persisted. Returns true if *any* contact is verified. */
+  get isVerified(): boolean {
+    return this.emailVerified || this.phoneVerified;
+  }
+
+  // -------------------------------------------------------------------------
+  // Business data
+  // -------------------------------------------------------------------------
   /** Human‑readable pharmacy/agent name */
   @Column({ length: 255 })
   pharmacyName: string;
@@ -44,10 +69,6 @@ export class User {
     default: AgentTier.BRONZE,
   })
   agentTier: AgentTier;
-
-  /** Has the user verified the e‑mail address? */
-  @Column({ default: false })
-  isVerified: boolean;
 
   /** Role of the account – default USER */
   @Column({
