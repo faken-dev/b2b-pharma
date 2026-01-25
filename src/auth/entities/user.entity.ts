@@ -17,7 +17,6 @@ import { PasswordResetToken } from './password-reset-token.entity';
  */
 @Entity('users')
 @Unique(['email'])
-@Unique(['username'])
 @Unique(['phoneNumber'])
 export class User {
   @PrimaryGeneratedColumn('uuid')
