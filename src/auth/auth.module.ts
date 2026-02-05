@@ -14,10 +14,16 @@ import { TierGuard } from './guard/tier.guard';
 import { PasswordResetToken } from './entities/password-reset-token.entity';
 import { GoogleStrategy } from './strategies/google.strategy';
 import { FacebookStrategy } from './strategies/facebook.strategy';
+import { OneTimeToken } from './entities/one-time-token.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([User, RefreshToken, PasswordResetToken]),
+    TypeOrmModule.forFeature([
+      User,
+      RefreshToken,
+      PasswordResetToken,
+      OneTimeToken,
+    ]),
     NotificationModule,
     ConfigModule,
     PassportModule.register({ defaultStrategy: 'jwt' }),
