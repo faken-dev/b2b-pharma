@@ -1,11 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import sgMail from '@sendgrid/mail';
-
+import { Twilio } from 'twilio';
 @Injectable()
 export class NotificationService {
   private readonly logger = new Logger(NotificationService.name);
   private readonly from: string;
+  private readonly twilio?: Twilio;
 
   constructor(private readonly configService: ConfigService) {
     const apiKey = this.configService.get<string>('SENDGRID_API_KEY');
@@ -20,6 +21,18 @@ export class NotificationService {
     this.from =
       this.configService.get<string>('SENDGRID_FROM') ??
       'no-reply@pharmab2b.com';
+
+    const accountSid = this.configService.get<string>('TWILIO_ACCOUNT_SID');
+    const authToken = this.configService.get<string>('TWILIO_AUTH_TOKEN');
+
+    if (accountSid && authToken) {
+      this.twilio = new Twilio(accountSid, authToken);
+      this.logger.log('Twilio initialized successfully');
+    } else {
+      this.logger.warn(
+        'Twilio credentials missing. SMS functionality will be disabled.',
+      );
+    }
   }
 
   /**
@@ -133,6 +146,73 @@ export class NotificationService {
 
       this.logger.error(`Failed to send e-mail to ${to}: ${errMsg}`);
 
+      throw error;
+    }
+  }
+
+  /**
+   * Sends an SMS message.
+   *
+   * UsesTwilio
+   * In VietNam  need to have brand name to send SMS
+   * So we use WhatsApp instead of SMS
+   */
+  async sendSms(to: string, message: string): Promise<void> {
+    const fromNumber = this.configService.get<string>('TWILIO_FROM_PHONE');
+
+    if (!this.twilio || !fromNumber) {
+      this.logger.error('Twilio SMS configuration missing');
+      throw new Error('Missing SMS configuration');
+    }
+
+    try {
+      await this.twilio.messages.create({
+        from: fromNumber,
+        to,
+        body: message,
+      });
+
+      this.logger.log(`SMS sent → ${to}`);
+    } catch (error: unknown) {
+      let errMsg = 'Unknown error';
+
+      if (error instanceof Error) {
+        errMsg = error.message;
+      }
+
+      this.logger.error(`Failed to send SMS to ${to}: ${errMsg}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Sends a WhatsApp message.
+   * Uses Twilio WhatsApp API in sandbox mode.
+   * @param to Recipient WhatsApp number in E.164 format (e.g., +1234567890)
+   * @param message Message content
+   */
+  async sendWhatsApp(to: string, message: string): Promise<void> {
+    // const fromWhatsApp = `whatsapp:${this.configService.get<string>('TWILIO_WHATSAPP_NUMBER')}`;
+    // const toWhatsApp = `whatsapp:${to}`;
+    const fromWhatsApp = 'whatsapp:+14155238886';
+    const toWhatsApp = `whatsapp:+84833216274`;
+
+    if (!this.twilio || !fromWhatsApp) {
+      this.logger.error('Twilio WhatsApp configuration missing');
+      throw new Error('Missing configuration');
+    }
+
+    try {
+      await this.twilio.messages.create({
+        from: fromWhatsApp,
+        to: toWhatsApp,
+        body: message,
+      });
+
+      this.logger.log(`WhatsApp sent → ${to}`);
+    } catch (error: unknown) {
+      const errMsg = error instanceof Error ? error.message : 'Unknown error';
+      this.logger.error(`Failed to send WhatsApp to ${to}: ${errMsg}`);
       throw error;
     }
   }
