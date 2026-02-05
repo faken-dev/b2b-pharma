@@ -27,6 +27,8 @@ import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { AuthGuard } from '@nestjs/passport';
 import { SetPasswordDto } from './dto/set-password.dto';
 import { User } from './entities/user.entity';
+import { VerifyOtpDto } from './dto/verify-otp.dto';
+import { RequestOtpDto } from './dto/request-otp.dto';
 
 interface RequestWithUser extends Request {
   user: User;
@@ -48,6 +50,9 @@ export class AuthController {
    */
   @Post('register')
   @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({
+    summary: 'Register a new pharmacy/agent (email or phone required)',
+  })
   async register(@Body() registerDto: RegisterDto) {
     return this.authService.register(registerDto);
   }
@@ -63,10 +68,22 @@ export class AuthController {
   }
 
   /**
+   * POST /auth/verify-phone
+   * Dành cho việc xác thực số điện thoại ngay sau khi đăng ký hoặc từ trang profile.
+   */
+  @Post('verify-phone')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Verify phone number using OTP' })
+  async verifyPhone(@Body() dto: VerifyOtpDto) {
+    return this.authService.verifyPhone(dto);
+  }
+
+  /**
    * POST /auth/login
    * Authenticates user credentials and returns JWT tokens.
    */
   @Post('login')
+  @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Login with e-mail & password' })
   async login(@Body() loginDto: LoginDto) {
     return this.authService.login(loginDto);
@@ -99,6 +116,36 @@ export class AuthController {
   }
 
   // ======================================================
+  //  OTP
+  // ======================================================
+
+  // -------------------------------------------------
+  // REQUEST OTP (phone verification or password reset)
+  // -------------------------------------------------
+  @Post('otp/request')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary:
+      'Request OTP – default is phone verification; use type = PASSWORD_RESET for reset flow',
+  })
+  async requestOtp(@Body() dto: RequestOtpDto) {
+    return this.authService.requestOtp(dto);
+  }
+
+  // -------------------------------------------------
+  // VERIFY OTP
+  // -------------------------------------------------
+  @Post('otp/verify')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary:
+      'Verify OTP, update verification flags, or confirm password‑reset OTP',
+  })
+  async verifyOtp(@Body() dto: VerifyOtpDto) {
+    return this.authService.verifyOtp(dto);
+  }
+
+  // ======================================================
   //  PASSWORD RECOVERY
   // ======================================================
 
@@ -122,6 +169,13 @@ export class AuthController {
     return this.authService.resetPassword(dto);
   }
 
+  // @Post('reset-password-otp')
+  // @HttpCode(HttpStatus.OK)
+  // @ApiOperation({ summary: 'Reset password using phone OTP' })
+  // async resetPasswordOtp(@Body() dto: ResetPasswordOtpDto) {
+  //   return this.authService.resetPasswordWithOtp(dto.phoneNumber, dto.otp, dto.newPassword);
+  // }
+
   /**
    * POST /auth/set-password
    * Allows a logged‑in social user to set a local password.
@@ -144,8 +198,10 @@ export class AuthController {
    */
   @Get('me')
   @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Get current user profile (password omitted)' })
   getProfile(@Req() req: RequestWithUser) {
-    return req.user;
+    const { password, ...profile } = req.user as any;
+    return profile;
   }
 
   // ======================================================
