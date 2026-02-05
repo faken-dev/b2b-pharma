@@ -17,13 +17,25 @@ import { InjectRepository } from '@nestjs/typeorm';
 import * as bcrypt from 'bcrypt';
 import { NotificationService } from '../notification/notification.service';
 import { JwtService } from '@nestjs/jwt';
-import ms from 'ms';
+import ms, { StringValue } from 'ms';
 import { RefreshToken } from './entities/refresh-token.entity';
 import { randomBytes } from 'crypto';
 import { ConfigService } from '@nestjs/config';
 import { OAuthUserDto } from './dto/oauth-user.dto';
 import { AuthProvider } from './enum/auth-provider.enum';
 import { Role } from './enum/role.enum';
+import { OneTimeToken } from './entities/one-time-token.entity';
+import { OneTimeTokenType } from './enum/one-time-token-type';
+import { RequestOtpDto } from './dto/request-otp.dto';
+import { normalizePhone } from 'src/common/utils/phone.util';
+import { VerifyOtpDto } from './dto/verify-otp.dto';
+
+interface EmailVerifyPayload {
+  sub: string;
+  email: string;
+  iat: number;
+  exp: number;
+}
 
 @Injectable()
 export class AuthService {
@@ -38,6 +50,9 @@ export class AuthService {
 
     @InjectRepository(PasswordResetToken)
     private readonly resetTokenRepo: Repository<PasswordResetToken>,
+
+    @InjectRepository(OneTimeToken)
+    private readonly otpRepo: Repository<OneTimeToken>,
 
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
@@ -54,48 +69,62 @@ export class AuthService {
    * – Returns the created user **without** the password field.
    */
   async register(dto: RegisterDto) {
-    // Check e‑mail uniqueness
-    const exists = await this.userRepo.findOne({
-      where: { email: dto.email },
-    });
-    if (exists) {
-      this.logger.warn(`Registration attempt with used e‑mail: ${dto.email}`);
-      throw new BadRequestException('E‑mail already registered');
+    // ---- Ensure at least one contact method ----
+    if (!dto.email && !dto.phoneNumber) {
+      throw new BadRequestException('Provide either e‑mail or phone number');
     }
+
+    // ---- Uniqueness checks ----
+    const [dupEmail, dupPhone] = await Promise.all([
+      dto.email ? this.userRepo.findOne({ where: { email: dto.email } }) : null,
+      dto.phoneNumber
+        ? this.userRepo.findOne({
+            where: { phoneNumber: normalizePhone(dto.phoneNumber) },
+          })
+        : null,
+    ]);
+    if (dupEmail) throw new BadRequestException('E‑mail already registered');
+    if (dupPhone)
+      throw new BadRequestException('Phone number already registered');
 
     // Hash the password (bcrypt, cost = 10)
     const hashedPassword = await this.hashPassword(dto.password);
 
-    // Create & persist the user (agentTier defaults to BRONZE, isVerified false)
-    const newUser = this.userRepo.create({
-      email: dto.email,
+    // Create & persist the user (agentTier defaults to BRONZE, emailVerified false, phoneVerified false)
+    const newUser = this.userRepo.create(<Partial<User>>{
+      email: dto.email ?? null,
+      phoneNumber: dto.phoneNumber ? normalizePhone(dto.phoneNumber) : null,
       password: hashedPassword,
       pharmacyName: dto.pharmacyName,
       businessLicense: dto.businessLicense,
+      role: Role.USER,
+      authProvider: AuthProvider.LOCAL,
+      emailVerified: false,
+      phoneVerified: false,
     });
-    const savedUser = await this.userRepo.save(newUser);
+    const savedUser: User = await this.userRepo.save(newUser);
 
-    // Create a verification JWT (expires in 24h)
-    const token = await this.jwtService.signAsync(
-      {
-        sub: savedUser.id,
-        email: savedUser.email,
-      },
-      { expiresIn: '24h' },
-    );
+    if (savedUser.email) {
+      const verificationToken =
+        await this.createEmailVerificationToken(savedUser);
 
-    // Send the verification e‑mail
-    try {
       await this.notificationService.sendVerificationEmail(
         savedUser.email,
-        token,
+        verificationToken,
       );
-    } catch (err: unknown) {
-      const errMsg = err instanceof Error ? err.message : 'Unknown error';
-      this.logger.error(
-        `Failed to send verification email to ${savedUser.email}: ${errMsg}`,
+    }
+
+    if (savedUser.phoneNumber) {
+      const otp = await this.createOtp(
+        savedUser,
+        OneTimeTokenType.PHONE_VERIFICATION,
+        '10m',
       );
-      throw err;
+
+      await this.notificationService.sendWhatsApp(
+        savedUser.phoneNumber,
+        `Your verification code is ${otp}`,
+      );
     }
 
     // Return the user without the password field
@@ -115,7 +144,7 @@ export class AuthService {
     let payload: any;
     try {
       // `jwtService.verifyAsync` will throw on malformed/expired token.
-      payload = await this.jwtService.verifyAsync(token);
+      payload = await this.jwtService.verifyAsync<EmailVerifyPayload>(token);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Unknown error';
       this.logger.warn(`Invalid verification token: ${message}`);
@@ -139,17 +168,50 @@ export class AuthService {
     }
 
     // Idempotent handling – if already verified we simply return.
-    if (user.isVerified) {
+    if (user.emailVerified) {
       this.logger.log(`User ${user.email} already verified`);
       return { message: 'Account already verified' };
     }
 
     // Flip the flag and persist
-    user.isVerified = true;
+    user.emailVerified = true;
     await this.userRepo.save(user);
     this.logger.log(`User ${user.email} verified successfully`);
 
     return { message: 'Account verified successfully' };
+  }
+
+  /**
+   * Verify phone using OTP sent during registration.
+   */
+  async verifyPhone(dto: VerifyOtpDto) {
+    console.log('DTO nhận được:', dto);
+    const normalized = normalizePhone(dto.phoneNumber);
+    console.log('normal nhận được:', normalized);
+    const user = await this.userRepo.findOne({
+      where: { phoneNumber: normalized },
+    });
+
+    if (!user) {
+      throw new BadRequestException('Phone number not found');
+    }
+
+    // Validate OTP
+    await this.verifyOtpHelper(
+      user,
+      dto.otp,
+      OneTimeTokenType.PHONE_VERIFICATION,
+    );
+
+    if (user.phoneVerified) {
+      return { message: 'Phone already verified' };
+    }
+
+    user.phoneVerified = true;
+    await this.userRepo.save(user);
+
+    this.logger.log(`Phone ${normalized} verified successfully`);
+    return { message: 'Phone verified successfully' };
   }
 
   /**
@@ -159,13 +221,36 @@ export class AuthService {
    * by the global TransformInterceptor.
    */
   async login(dto: LoginDto) {
-    const user = await this.userRepo.findOne({
-      where: { email: dto.email },
-    });
+    const { identifier, password } = dto;
+    let user: User | null;
+    let method: 'email' | 'phone';
+
+    // ---- Detect identifier type ----
+    if (identifier.includes('@')) {
+      method = 'email';
+      user = await this.userRepo.findOne({ where: { email: identifier } });
+    } else {
+      method = 'phone';
+      const normalized = normalizePhone(identifier);
+      user = await this.userRepo.findOne({
+        where: { phoneNumber: normalized },
+      });
+    }
 
     if (!user) {
-      this.logger.warn(`Login attempt with unknown e-mail: ${dto.email}`);
       throw new UnauthorizedException('Invalid credentials');
+    }
+
+    // ---- Enforce per‑method verification flag ----
+    if (method === 'email' && !user.emailVerified) {
+      throw new UnauthorizedException(
+        'E‑mail not verified. Please check your inbox.',
+      );
+    }
+    if (method === 'phone' && !user.phoneVerified) {
+      throw new UnauthorizedException(
+        'Phone number not verified. Please verify via OTP.',
+      );
     }
 
     if (user.authProvider !== AuthProvider.LOCAL) {
@@ -174,22 +259,15 @@ export class AuthService {
       );
     }
 
-    if (!user.isVerified) {
-      this.logger.warn(`Login attempt for unverified account: ${dto.email}`);
-      throw new UnauthorizedException('Account not verified');
+    if (!user.password) {
+      throw new UnauthorizedException('Password not set for this account');
     }
 
-    const passwordMatches = await this.comparePassword(
-      dto.password,
-      user.password,
-    );
+    const passwordMatches = await this.comparePassword(password, user.password);
 
     if (!passwordMatches) {
-      this.logger.warn(`Invalid password for e-mail: ${dto.email}`);
       throw new UnauthorizedException('Invalid credentials');
     }
-
-    this.logger.log(`User ${dto.email} logged in successfully`);
 
     const tokens = await this.generateTokens(user);
     return tokens;
@@ -286,23 +364,204 @@ export class AuthService {
   // ========================================================================
 
   /**
-   * Request a password reset for a user.
-   * @param dto ForgotPasswordDto containing the user's email.
-   * @returns A success message even if the e‑mail does not exist (for security).
+   * Request password reset.
+   * – If email provided → send reset link via email.
+   * – If phone provided → send OTP via SMS.
    */
   async requestPasswordReset(dto: ForgotPasswordDto) {
-    const { email } = dto;
-    const user = await this.userRepo.findOne({ where: { email } });
-    if (!user) {
-      // Do *not* reveal that the e‑mail does not exist – just pretend we sent.
-      this.logger.warn(`Password‑reset requested for unknown e‑mail: ${email}`);
-      return { message: 'Sent email successfully' };
+    const { email, phoneNumber } = dto;
+
+    if (!email && !phoneNumber) {
+      throw new BadRequestException('Provide either email or phone number');
     }
 
-    const rawToken = await this.createResetToken(user);
-    await this.sendResetEmail(user.email, rawToken);
-    this.logger.log(`Password‑reset e‑mail sent to ${email}`);
-    return { message: 'Sent email successfully' };
+    let user: User | null = null;
+    let method: 'email' | 'phone';
+
+    if (email) {
+      method = 'email';
+      user = await this.userRepo.findOne({ where: { email } });
+    } else {
+      method = 'phone';
+      const normalized = normalizePhone(phoneNumber!);
+      user = await this.userRepo.findOne({
+        where: { phoneNumber: normalized },
+      });
+    }
+
+    if (!user) {
+      // Silent fail for security - don't reveal if user exists
+      this.logger.warn(
+        `Password reset requested for unknown ${method}: ${email || phoneNumber}`,
+      );
+      return {
+        message:
+          method === 'email'
+            ? 'If this email exists, a reset link has been sent'
+            : 'If this phone number exists, an OTP has been sent',
+      };
+    }
+
+    if (method === 'email') {
+      // Send reset link via email
+      const resetToken = await this.createPasswordResetToken(user);
+      await this.sendResetEmail(user.email!, resetToken);
+      this.logger.log(`Password reset email sent to ${user.email}`);
+    } else {
+      // Send OTP via SMS
+      const otp = await this.createOtp(
+        user,
+        OneTimeTokenType.PASSWORD_RESET,
+        '30m',
+      );
+      await this.notificationService.sendSms(
+        user.phoneNumber!,
+        `Your PharmaB2B password reset code is ${otp}`,
+      );
+      this.logger.log(`Password reset OTP sent to ${user.phoneNumber}`);
+    }
+
+    return {
+      message:
+        method === 'email'
+          ? 'If this email exists, a reset link has been sent'
+          : 'If this phone number exists, an OTP has been sent',
+    };
+  }
+
+  /**
+   * Reset password using email token (JWT-based from email link).
+   */
+  async resetPasswordWithToken(dto: ResetPasswordDto) {
+    const { token, newPassword } = dto;
+
+    const allTokens = await this.resetTokenRepo.find({
+      where: { used: false },
+      relations: ['user'],
+    });
+
+    const match = await Promise.all(
+      allTokens.map(async (rt) => {
+        const ok = await bcrypt.compare(token, rt.tokenHash);
+        return ok ? rt : null;
+      }),
+    );
+
+    const resetEntity = match.find((rt) => rt !== null);
+
+    if (!resetEntity) {
+      throw new BadRequestException('Invalid or expired reset token');
+    }
+
+    if (resetEntity.expiresAt < new Date()) {
+      throw new BadRequestException('Reset token has expired');
+    }
+
+    const hashedPw = await this.hashPassword(newPassword);
+    resetEntity.user.password = hashedPw;
+    await this.userRepo.save(resetEntity.user);
+
+    resetEntity.used = true;
+    await this.resetTokenRepo.save(resetEntity);
+
+    this.logger.log(
+      `Password reset successful for ${resetEntity.user.email || resetEntity.user.phoneNumber}`,
+    );
+    return { message: 'Password has been reset successfully' };
+  }
+
+  /**
+   * Reset password using phone OTP.
+   */
+  async resetPasswordWithOtp(
+    phoneNumber: string,
+    otp: string,
+    newPassword: string,
+  ) {
+    const normalized = normalizePhone(phoneNumber);
+    const user = await this.userRepo.findOne({
+      where: { phoneNumber: normalized },
+    });
+
+    if (!user) {
+      throw new BadRequestException('Phone number not found');
+    }
+
+    // Verify OTP
+    await this.verifyOtpHelper(user, otp, OneTimeTokenType.PASSWORD_RESET);
+
+    // Update password
+    const hashedPw = await this.hashPassword(newPassword);
+    user.password = hashedPw;
+    await this.userRepo.save(user);
+
+    this.logger.log(`Password reset via OTP successful for ${normalized}`);
+    return { message: 'Password has been reset successfully' };
+  }
+
+  // ========================================================================
+  // OTP MANAGEMENT
+  // ========================================================================
+
+  /**
+   * Request an OTP.
+   * Default type = PHONE_VERIFICATION (used to verify a phone number).
+   * Also for request PASSWORD_RESET (will be used in the password‑reset flow).
+   */
+  async requestOtp(dto: RequestOtpDto) {
+    const type = dto.type ?? OneTimeTokenType.PHONE_VERIFICATION;
+    const normalized = normalizePhone(dto.phoneNumber);
+    const user = await this.userRepo.findOne({
+      where: { phoneNumber: normalized },
+    });
+    if (!user) {
+      throw new BadRequestException('Phone number not found');
+    }
+
+    const ttl = type === OneTimeTokenType.PASSWORD_RESET ? '30m' : '10m';
+    const raw = await this.createOtp(user, type, ttl);
+
+    const message =
+      type === OneTimeTokenType.PASSWORD_RESET
+        ? `Your PharmaB2B password reset code is ${raw}`
+        : `Your PharmaB2B verification code is ${raw}`;
+
+    await this.notificationService.sendSms(normalized, message);
+
+    return { message: 'OTP sent successfully' };
+  }
+
+  /**
+   * Verify an OTP.
+   * Depending on the token type, it will:
+   *   - EMAIL_VERIFICATION → set user.emailVerified = true
+   *   - PHONE_VERIFICATION → set user.phoneVerified = true
+   */
+  async verifyOtp(dto: VerifyOtpDto) {
+    const type = dto.type ?? OneTimeTokenType.PHONE_VERIFICATION;
+    const normalized = normalizePhone(dto.phoneNumber);
+    const user = await this.userRepo.findOne({
+      where: { phoneNumber: normalized },
+    });
+    if (!user) {
+      throw new BadRequestException('Phone number not found');
+    }
+
+    // Validate OTP
+    await this.verifyOtpHelper(user, dto.otp, type);
+
+    switch (type) {
+      case OneTimeTokenType.PHONE_VERIFICATION:
+        user.phoneVerified = true;
+        await this.userRepo.save(user);
+        return { message: 'Phone verified successfully' };
+
+      case OneTimeTokenType.PASSWORD_RESET:
+        return { message: 'OTP verified. You can now reset your password.' };
+
+      default:
+        throw new BadRequestException('Unsupported OTP type');
+    }
   }
 
   /**
@@ -370,7 +629,8 @@ export class AuthService {
       role: Role.USER,
       authProvider: dto.provider,
       providerId: dto.providerId,
-      isVerified: true,
+      emailVerified: true,
+      phoneVerified: false,
     });
 
     const saved = await this.userRepo.save(user);
@@ -406,6 +666,11 @@ export class AuthService {
     return this.userRepo.findOne({ where: { email } });
   }
 
+  async findByPhone(phoneNumber: string): Promise<User | null> {
+    const normalized = normalizePhone(phoneNumber);
+    return this.userRepo.findOne({ where: { phoneNumber: normalized } });
+  }
+
   // ========================================================================
   // PRIVATE HELPERS - Password Hashing
   // ========================================================================
@@ -423,7 +688,12 @@ export class AuthService {
   // ========================================================================
 
   private async generateTokens(user: User) {
-    const payload = { sub: user.id, email: user.email };
+    const payload = {
+      sub: user.id,
+      email: user.email,
+      phoneNumber: user.phoneNumber,
+    };
+
     const accessToken = await this.jwtService.signAsync(payload, {
       expiresIn: '1h',
     });
@@ -433,7 +703,7 @@ export class AuthService {
     return { accessToken, refreshToken };
   }
 
-  private async hashRefreshToken(token: string): Promise<string> {
+  private async hashToken(token: string): Promise<string> {
     return bcrypt.hash(token, 10);
   }
 
@@ -443,7 +713,7 @@ export class AuthService {
    */
   private async createRefreshToken(user: User): Promise<string> {
     const rawToken = randomBytes(40).toString('hex');
-    const tokenHash = await this.hashRefreshToken(rawToken);
+    const tokenHash = await this.hashToken(rawToken);
 
     const expiresInStr = (this.configService.get<string>(
       'REFRESH_TOKEN_EXPIRES_IN',
@@ -461,23 +731,76 @@ export class AuthService {
     return rawToken;
   }
 
-  // ========================================================================
-  // PRIVATE HELPERS - Password Reset
-  // ========================================================================
-
-  private async hashResetToken(token: string): Promise<string> {
-    return bcrypt.hash(token, 10);
+  /**
+   * Create email verification token (JWT).
+   */
+  private async createEmailVerificationToken(user: User): Promise<string> {
+    const payload = { sub: user.id, email: user.email };
+    return this.jwtService.signAsync(payload, { expiresIn: '24h' });
   }
 
   /**
-   * Create a fresh reset token, persist its hash, and return the plain token.
+   * Create OTP and return the plain code.
    */
-  private async createResetToken(user: User): Promise<string> {
+  private async createOtp(
+    user: User,
+    type: OneTimeTokenType,
+    ttl: StringValue = '10m',
+  ): Promise<string> {
+    const raw = randomBytes(3).toString('hex');
+    const hash = await this.hashToken(raw);
+
+    const ttlMs = ms(ttl);
+    const expiresAt = new Date(Date.now() + ttlMs);
+
+    const token = this.otpRepo.create({
+      tokenHash: hash,
+      expiresAt,
+      used: false,
+      type,
+      user,
+    });
+
+    await this.otpRepo.save(token);
+    return raw;
+  }
+
+  /**
+   * Verify OTP helper.
+   */
+  private async verifyOtpHelper(
+    user: User,
+    raw: string,
+    type: OneTimeTokenType,
+  ): Promise<void> {
+    const candidates = await this.otpRepo.find({
+      where: { used: false, type, user: user },
+    });
+
+    for (const t of candidates) {
+      const ok = await bcrypt.compare(raw, t.tokenHash);
+      if (ok) {
+        if (t.expiresAt < new Date()) {
+          throw new BadRequestException('OTP has expired');
+        }
+        t.used = true;
+        await this.otpRepo.save(t);
+        return;
+      }
+    }
+
+    throw new BadRequestException('Invalid OTP');
+  }
+
+  /**
+   * Create password reset token (for email-based reset).
+   */
+  private async createPasswordResetToken(user: User): Promise<string> {
     const rawToken = randomBytes(40).toString('hex');
-    const tokenHash = await this.hashResetToken(rawToken);
-    const expiresIn = (this.configService.get<string>(
-      'PASSWORD_RESET_EXPIRES_IN',
-    ) ?? '30m') as ms.StringValue;
+    const tokenHash = await this.hashToken(rawToken);
+
+    const expiresIn = (this.configService.get('PASSWORD_RESET_EXPIRES_IN') ??
+      '30m') as ms.StringValue;
     const expiresAt = new Date(Date.now() + ms(expiresIn));
 
     const entity = this.resetTokenRepo.create({
