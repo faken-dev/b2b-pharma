@@ -3,7 +3,7 @@ import { ApiProperty } from '@nestjs/swagger';
 
 export class LoginDto {
   @ApiProperty({
-    description: 'Có thể là e‑mail hoặc số điện thoại (định dạng bất kỳ).',
+    description: 'It can be email or phone number',
     example: 'pharmacy@example.com | +84912345678',
   })
   @IsString()
