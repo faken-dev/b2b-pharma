@@ -15,7 +15,7 @@ import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { AuthService } from './auth.service';
 import { VerifyEmailDto } from './dto/verify-email.dto';
-import { ApiTags, ApiOperation } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { JwtAuthGuard } from './guard/jwt-auth.guard';
 import { AgentTier } from './enum/agent-tier.enum';
 import { Tier } from './decorator/tier.decorator';
@@ -29,6 +29,10 @@ import { SetPasswordDto } from './dto/set-password.dto';
 import { User } from './entities/user.entity';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { RequestOtpDto } from './dto/request-otp.dto';
+import { MfaSetupDto } from './dto/mfa-setup.dto';
+import { MfaVerifyDto } from './dto/mfa-verify.dto';
+import { MfaDisableDto } from './dto/mfa-disable.dto';
+import { MfaLoginDto } from './dto/mfa-login.dto';
 
 interface RequestWithUser extends Request {
   user: User;
@@ -69,7 +73,7 @@ export class AuthController {
 
   /**
    * POST /auth/verify-phone
-   * Dành cho việc xác thực số điện thoại ngay sau khi đăng ký hoặc từ trang profile.
+   * Verifies phone number using OTP code.
    */
   @Post('verify-phone')
   @HttpCode(HttpStatus.OK)
@@ -119,9 +123,10 @@ export class AuthController {
   //  OTP
   // ======================================================
 
-  // -------------------------------------------------
-  // REQUEST OTP (phone verification or password reset)
-  // -------------------------------------------------
+  /**
+   * POST /auth/otp/request
+   * Sends an OTP to the user’s phone for verification or password reset.
+   */
   @Post('otp/request')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
@@ -132,9 +137,10 @@ export class AuthController {
     return this.authService.requestOtp(dto);
   }
 
-  // -------------------------------------------------
-  // VERIFY OTP
-  // -------------------------------------------------
+  /**
+   * POST /auth/otp/verify
+   * Verifies the OTP code for phone verification or password reset.
+   */
   @Post('otp/verify')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
@@ -186,6 +192,61 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   async setPassword(@Req() req: RequestWithUser, @Body() dto: SetPasswordDto) {
     return this.authService.setPasswordForOAuthUser(req.user, dto.newPassword);
+  }
+
+  // -----------------------------------------------------------------
+  // MFA ENDPOINTS (Protected by JWT)
+  // -----------------------------------------------------------------
+
+  /**
+   * POST /auth/mfa/setup
+   * Generates MFA secret and QR code for the current user.
+   */
+  @UseGuards(JwtAuthGuard)
+  @Post('mfa/setup')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Setup MFA - generates secret and QR code' })
+  async setupMfa(@Req() req: RequestWithUser, @Body() dto: MfaSetupDto) {
+    return this.authService.setupMfa(req.user, dto.password);
+  }
+
+  /**
+   * POST /auth/mfa/verify-setup
+   * Verifies the TOTP code and enables MFA for the current user.
+   */
+  @UseGuards(JwtAuthGuard)
+  @Post('mfa/verify-setup')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Verify MFA setup with TOTP code' })
+  async verifyMfaSetup(@Req() req: RequestWithUser, @Body() dto: MfaVerifyDto) {
+    return this.authService.verifyMfaSetup(req.user, dto.code);
+  }
+
+  /**
+   * POST /auth/mfa/disable
+   * Disables MFA for the current user after verifying password and code.
+   */
+  @UseGuards(JwtAuthGuard)
+  @Post('mfa/disable')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Disable MFA for current user' })
+  async disableMfa(@Req() req: RequestWithUser, @Body() dto: MfaDisableDto) {
+    return this.authService.disableMfa(req.user, dto.password, dto.code);
+  }
+
+  /**
+   * POST /auth/mfa/regenerate-backup-codes
+   * Generates new MFA backup codes for the current user.
+   */
+  @UseGuards(JwtAuthGuard)
+  @Post('mfa/regenerate-backup-codes')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Generate new MFA backup codes' })
+  async regenerateBackupCodes(
+    @Req() req: RequestWithUser,
+    @Body() dto: MfaSetupDto,
+  ) {
+    return this.authService.regenerateBackupCodes(req.user, dto.password);
   }
 
   // ======================================================
