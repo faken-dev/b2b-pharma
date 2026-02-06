@@ -5,7 +5,6 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { RegisterDto } from './dto/register.dto';
-import { LoginDto } from './dto/login.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { LogoutDto } from './dto/logout.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
@@ -31,6 +30,7 @@ import { normalizePhone } from 'src/common/utils/phone.util';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import * as speakeasy from 'speakeasy';
 import * as QRCode from 'qrcode';
+import { MfaLoginDto } from './dto/mfa-login.dto';
 interface EmailVerifyPayload {
   sub: string;
   email: string;
@@ -221,8 +221,8 @@ export class AuthService {
    * Returns an object `{ accessToken: string }` that will be wrapped
    * by the global TransformInterceptor.
    */
-  async login(dto: LoginDto) {
-    const { identifier, password } = dto;
+  async login(dto: MfaLoginDto) {
+    const { identifier, password, code } = dto;
     let user: User | null;
     let method: 'email' | 'phone';
 
@@ -268,6 +268,17 @@ export class AuthService {
 
     if (!passwordMatches) {
       throw new UnauthorizedException('Invalid credentials');
+    }
+
+    if (user.mfaEnabled) {
+      if (!code) {
+        throw new UnauthorizedException('MFA_REQUIRED');
+      }
+
+      const valid = await this.verifyMfaCode(user, code);
+      if (!valid) {
+        throw new UnauthorizedException('Invalid MFA code');
+      }
     }
 
     const tokens = await this.generateTokens(user);

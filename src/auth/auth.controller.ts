@@ -12,7 +12,6 @@ import {
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { RegisterDto } from './dto/register.dto';
-import { LoginDto } from './dto/login.dto';
 import { AuthService } from './auth.service';
 import { VerifyEmailDto } from './dto/verify-email.dto';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
@@ -89,7 +88,7 @@ export class AuthController {
   @Post('login')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Login with e-mail & password' })
-  async login(@Body() loginDto: LoginDto) {
+  async login(@Body() loginDto: MfaLoginDto) {
     return this.authService.login(loginDto);
   }
 
