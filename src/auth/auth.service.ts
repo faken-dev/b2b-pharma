@@ -29,7 +29,8 @@ import { OneTimeTokenType } from './enum/one-time-token-type';
 import { RequestOtpDto } from './dto/request-otp.dto';
 import { normalizePhone } from 'src/common/utils/phone.util';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
-
+import * as speakeasy from 'speakeasy';
+import * as QRCode from 'qrcode';
 interface EmailVerifyPayload {
   sub: string;
   email: string;
@@ -652,6 +653,154 @@ export class AuthService {
     this.logger.log(`Password set for OAuth user: ${user.email}`);
 
     return { message: 'Password set successfully' };
+  }
+
+  // =======================================================================
+  // MFA (TOTP) MANAGEMENT
+  // ========================================================================
+
+  /**
+   * Generate MFA secret and QR code for a user
+   */
+  async setupMfa(user: User, password: string) {
+    if (!user.password) {
+      throw new BadRequestException('User has no password set');
+    }
+
+    const pwMatch = await this.comparePassword(password, user.password);
+    if (!pwMatch) {
+      throw new UnauthorizedException('Invalid password');
+    }
+
+    const secret = speakeasy.generateSecret({
+      name: `PharmaB2B (${user.email || user.phoneNumber})`,
+      issuer: 'PharmaB2B',
+    });
+
+    if (!secret.otpauth_url) {
+      throw new BadRequestException('Failed to generate MFA QR code');
+    }
+
+    const qrCodeUrl = await QRCode.toDataURL(secret.otpauth_url);
+
+    const backupCodes = Array.from({ length: 8 }, () =>
+      Math.random().toString(36).substring(2, 10).toUpperCase(),
+    );
+
+    user.mfaSecret = secret.base32;
+    user.mfaBackupCodes = backupCodes;
+    user.mfaEnabled = false;
+    user.mfaEnabledAt = null;
+
+    await this.userRepo.save(user);
+
+    return {
+      secret: secret.base32,
+      qrCodeUrl,
+      backupCodes,
+    };
+  }
+
+  /**
+   * Verify MFA setup with TOTP code
+   */
+  async verifyMfaSetup(user: User, code: string) {
+    if (!user.mfaSecret) {
+      throw new BadRequestException('MFA not set up for this user');
+    }
+
+    const verified = speakeasy.totp.verify({
+      secret: user.mfaSecret,
+      encoding: 'base32',
+      token: code,
+      window: 2,
+    });
+
+    if (!verified) {
+      throw new BadRequestException('Invalid MFA code');
+    }
+
+    user.mfaEnabled = true;
+    user.mfaEnabledAt = new Date();
+    await this.userRepo.save(user);
+
+    this.logger.log(`MFA enabled for user ${user.id}`);
+    return {
+      message: 'MFA enabled successfully',
+      backupCodes: user.mfaBackupCodes,
+    };
+  }
+
+  /**
+   * Verify MFA code during login
+   */
+  async verifyMfaCode(user: User, code: string): Promise<boolean> {
+    if (!user.mfaEnabled || !user.mfaSecret) {
+      throw new BadRequestException('MFA not enabled for this account');
+    }
+
+    const totpValid = speakeasy.totp.verify({
+      secret: user.mfaSecret,
+      encoding: 'base32',
+      token: code,
+      window: 2,
+    });
+
+    if (totpValid) {
+      return true;
+    }
+
+    if (user.mfaBackupCodes?.includes(code)) {
+      user.mfaBackupCodes = user.mfaBackupCodes.filter((c) => c !== code);
+      await this.userRepo.save(user);
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Disable MFA for a user
+   */
+  async disableMfa(user: User, password: string, code: string) {
+    const pwMatch = await this.comparePassword(password, user.password);
+    if (!pwMatch) {
+      throw new UnauthorizedException('Invalid password');
+    }
+
+    const codeValid = await this.verifyMfaCode(user, code);
+    if (!codeValid) {
+      throw new BadRequestException('Invalid MFA or backup code');
+    }
+
+    user.mfaEnabled = false;
+    user.mfaSecret = null;
+    user.mfaBackupCodes = null;
+    user.mfaEnabledAt = null;
+
+    await this.userRepo.save(user);
+    this.logger.log(`MFA disabled for user ${user.id}`);
+
+    return { message: 'MFA disabled successfully' };
+  }
+
+  /**
+   * Generate new backup codes
+   */
+  async regenerateBackupCodes(user: User, password: string) {
+    const pwMatch = await this.comparePassword(password, user.password);
+    if (!pwMatch) {
+      throw new UnauthorizedException('Invalid password');
+    }
+
+    const newBackupCodes = Array.from({ length: 8 }, () =>
+      Math.random().toString(36).substring(2, 10).toUpperCase(),
+    );
+
+    user.mfaBackupCodes = newBackupCodes;
+    await this.userRepo.save(user);
+
+    return { backupCodes: newBackupCodes };
   }
 
   // ========================================================================

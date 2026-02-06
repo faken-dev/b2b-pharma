@@ -57,13 +57,13 @@ export class User {
   mfaEnabled: boolean;
 
   @Column({ type: 'varchar', nullable: true })
-  mfaSecret?: string;
+  mfaSecret?: string | null;
 
   @Column({ type: 'simple-array', nullable: true })
-  mfaBackupCodes?: string[];
+  mfaBackupCodes?: string[] | null;
 
   @Column({ type: 'timestamp', nullable: true })
-  mfaEnabledAt?: Date;
+  mfaEnabledAt?: Date | null;
 
   // -------------------------------------------------------------------------
   // Business data
