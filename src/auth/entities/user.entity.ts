@@ -50,6 +50,21 @@ export class User {
     return this.emailVerified || this.phoneVerified;
   }
 
+  // -----------------------------------------------------------------
+  // MFA (TOTP) Fields - ADD THESE NEW COLUMNS
+  // -----------------------------------------------------------------
+  @Column({ default: false })
+  mfaEnabled: boolean;
+
+  @Column({ type: 'varchar', nullable: true })
+  mfaSecret?: string;
+
+  @Column({ type: 'simple-array', nullable: true })
+  mfaBackupCodes?: string[];
+
+  @Column({ type: 'timestamp', nullable: true })
+  mfaEnabledAt?: Date;
+
   // -------------------------------------------------------------------------
   // Business data
   // -------------------------------------------------------------------------
