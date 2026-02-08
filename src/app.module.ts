@@ -5,6 +5,8 @@ import { typeOrmConfig } from './config/database.config';
 import { CoreModule } from './core/core.module';
 import { AuthModule } from './auth/auth.module';
 import { AdminModule } from './admin/admin.module';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { APP_GUARD } from '@nestjs/core';
 
 @Module({
   imports: [
@@ -20,11 +22,41 @@ import { AdminModule } from './admin/admin.module';
       inject: [ConfigService],
       useFactory: typeOrmConfig,
     }),
+
+    // Rare limiting Configuration
+    ThrottlerModule.forRootAsync({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => [
+        {
+          name: 'short',
+          ttl: 60000,
+          limit: 5,
+        },
+        {
+          name: 'medium',
+          ttl: 300000,
+          limit: 20,
+        },
+        {
+          name: 'long',
+          ttl: 3600000,
+          limit: 100,
+        },
+      ],
+    }),
+
     CoreModule,
     AuthModule,
     AdminModule,
   ],
   controllers: [],
-  providers: [],
+  providers: [
+    // Global Rate Limiting Guard
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
+    },
+  ],
 })
 export class AppModule {}
