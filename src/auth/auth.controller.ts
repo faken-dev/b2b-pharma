@@ -33,6 +33,8 @@ import { MfaVerifyDto } from './dto/mfa-verify.dto';
 import { MfaDisableDto } from './dto/mfa-disable.dto';
 import { MfaLoginDto } from './dto/mfa-login.dto';
 import { Throttle } from '@nestjs/throttler';
+import { RateLimitHeadersInterceptor } from 'src/common/interceptors/rate-limit-headers.interceptor';
+import { UseInterceptors } from '@nestjs/common';
 
 interface RequestWithUser extends Request {
   user: User;
@@ -53,6 +55,7 @@ export class AuthController {
    * Returns the created user (password excluded).
    * Throttle limit: 20 requests per hour
    */
+  @UseInterceptors(RateLimitHeadersInterceptor)
   @Throttle({ long: { limit: 20, ttl: 3600000 } })
   @Post('register')
   @HttpCode(HttpStatus.CREATED)
@@ -68,6 +71,7 @@ export class AuthController {
    * Confirms the e-mail address using the verification token.
    * Throttle limit: 20 requests per hour
    */
+  @UseInterceptors(RateLimitHeadersInterceptor)
   @Throttle({ long: { limit: 20, ttl: 3600000 } })
   @Get('verify-email')
   @ApiOperation({ summary: 'Verify e-mail address using token' })
@@ -80,6 +84,7 @@ export class AuthController {
    * Verifies phone number using OTP code.
    * Throttle limit: 20 requests per hour
    */
+  @UseInterceptors(RateLimitHeadersInterceptor)
   @Throttle({ long: { limit: 20, ttl: 3600000 } })
   @Post('verify-phone')
   @HttpCode(HttpStatus.OK)
@@ -93,6 +98,7 @@ export class AuthController {
    * Authenticates user credentials and returns JWT tokens.
    * Throttle limit: 5 requests per minute
    */
+  @UseInterceptors(RateLimitHeadersInterceptor)
   @Throttle({ short: { limit: 5, ttl: 60000 } })
   @Post('login')
   @HttpCode(HttpStatus.OK)
@@ -136,6 +142,7 @@ export class AuthController {
    * Sends an OTP to the user’s phone for verification or password reset.
    * Throttle limit: 5 requests per minute
    */
+  @UseInterceptors(RateLimitHeadersInterceptor)
   @Throttle({ short: { limit: 5, ttl: 60000 } })
   @Post('otp/request')
   @HttpCode(HttpStatus.OK)
@@ -152,6 +159,7 @@ export class AuthController {
    * Verifies the OTP code for phone verification or password reset.
    * Throttle limit: 20 requests per hour
    */
+  @UseInterceptors(RateLimitHeadersInterceptor)
   @Throttle({ long: { limit: 20, ttl: 3600000 } })
   @Post('otp/verify')
   @HttpCode(HttpStatus.OK)
@@ -171,6 +179,7 @@ export class AuthController {
    * POST /auth/forgot-password
    * Sends a password reset e-mail if the user exists.
    */
+  @UseInterceptors(RateLimitHeadersInterceptor)
   @Post('forgot-password')
   @HttpCode(HttpStatus.OK)
   async forgotPassword(@Body() dto: ForgotPasswordDto) {
