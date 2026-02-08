@@ -32,6 +32,7 @@ import { MfaSetupDto } from './dto/mfa-setup.dto';
 import { MfaVerifyDto } from './dto/mfa-verify.dto';
 import { MfaDisableDto } from './dto/mfa-disable.dto';
 import { MfaLoginDto } from './dto/mfa-login.dto';
+import { Throttle } from '@nestjs/throttler';
 
 interface RequestWithUser extends Request {
   user: User;
@@ -50,7 +51,9 @@ export class AuthController {
    * POST /auth/register
    * Creates a new account and sends a verification e-mail.
    * Returns the created user (password excluded).
+   * Throttle limit: 20 requests per hour
    */
+  @Throttle({ long: { limit: 20, ttl: 3600000 } })
   @Post('register')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
@@ -63,8 +66,10 @@ export class AuthController {
   /**
    * GET /auth/verify?token=...
    * Confirms the e-mail address using the verification token.
+   * Throttle limit: 20 requests per hour
    */
-  @Get('verify')
+  @Throttle({ long: { limit: 20, ttl: 3600000 } })
+  @Get('verify-email')
   @ApiOperation({ summary: 'Verify e-mail address using token' })
   async verify(@Query() query: VerifyEmailDto) {
     return this.authService.verifyEmail(query.token);
@@ -73,7 +78,9 @@ export class AuthController {
   /**
    * POST /auth/verify-phone
    * Verifies phone number using OTP code.
+   * Throttle limit: 20 requests per hour
    */
+  @Throttle({ long: { limit: 20, ttl: 3600000 } })
   @Post('verify-phone')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Verify phone number using OTP' })
@@ -84,7 +91,9 @@ export class AuthController {
   /**
    * POST /auth/login
    * Authenticates user credentials and returns JWT tokens.
+   * Throttle limit: 5 requests per minute
    */
+  @Throttle({ short: { limit: 5, ttl: 60000 } })
   @Post('login')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Login with e-mail & password' })
@@ -125,7 +134,9 @@ export class AuthController {
   /**
    * POST /auth/otp/request
    * Sends an OTP to the user’s phone for verification or password reset.
+   * Throttle limit: 5 requests per minute
    */
+  @Throttle({ short: { limit: 5, ttl: 60000 } })
   @Post('otp/request')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
@@ -139,7 +150,9 @@ export class AuthController {
   /**
    * POST /auth/otp/verify
    * Verifies the OTP code for phone verification or password reset.
+   * Throttle limit: 20 requests per hour
    */
+  @Throttle({ long: { limit: 20, ttl: 3600000 } })
   @Post('otp/verify')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
@@ -200,7 +213,9 @@ export class AuthController {
   /**
    * POST /auth/mfa/setup
    * Generates MFA secret and QR code for the current user.
+   * Throttle limit: 10 requests per 5 minutes
    */
+  @Throttle({ medium: { limit: 10, ttl: 300000 } })
   @UseGuards(JwtAuthGuard)
   @Post('mfa/setup')
   @ApiBearerAuth()
@@ -212,7 +227,9 @@ export class AuthController {
   /**
    * POST /auth/mfa/verify-setup
    * Verifies the TOTP code and enables MFA for the current user.
+   * Throttle limit: 10 requests per 5 minutes
    */
+  @Throttle({ medium: { limit: 10, ttl: 300000 } })
   @UseGuards(JwtAuthGuard)
   @Post('mfa/verify-setup')
   @ApiBearerAuth()
