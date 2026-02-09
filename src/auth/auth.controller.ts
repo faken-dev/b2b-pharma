@@ -35,6 +35,8 @@ import { MfaLoginDto } from './dto/mfa-login.dto';
 import { Throttle } from '@nestjs/throttler';
 import { RateLimitHeadersInterceptor } from 'src/common/interceptors/rate-limit-headers.interceptor';
 import { UseInterceptors } from '@nestjs/common';
+import { SessionListDto } from './dto/session.dto';
+import { RevokeSessionDto } from './dto/revoke-session.dto';
 
 interface RequestWithUser extends Request {
   user: User;
@@ -288,6 +290,70 @@ export class AuthController {
   getProfile(@Req() req: RequestWithUser) {
     const { password, ...profile } = req.user as any;
     return profile;
+  }
+
+  // -----------------------------------------------------------------
+  // SESSION MANAGEMENT ENDPOINTS
+  // -----------------------------------------------------------------
+
+  /**
+   * GET /auth/sessions
+   * Returns all active sessions for the current user.
+   */
+  @UseGuards(JwtAuthGuard)
+  @Get('sessions')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Get all active sessions for current user' })
+  async getSessions(@Req() req: RequestWithUser): Promise<SessionListDto> {
+    return this.authService.getSessions(req.user);
+  }
+
+  /**
+   * POST /auth/sessions/revoke
+   * Revokes a specific session by its ID.
+   */
+  @UseGuards(JwtAuthGuard)
+  @Post('sessions/revoke')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Revoke a specific session' })
+  async revokeSession(
+    @Req() req: RequestWithUser,
+    @Body() dto: RevokeSessionDto,
+  ) {
+    return this.authService.revokeSession(req.user, dto.sessionId);
+  }
+
+  /**
+   * POST /auth/sessions/revoke-others
+   * Revokes all other sessions for the current user (keeping the current session).
+   */
+  @UseGuards(JwtAuthGuard)
+  @Post('sessions/revoke-others')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Revoke all other sessions (keep current)' })
+  async revokeOtherSessions(@Req() req: RequestWithUser) {
+    const currentSessionId = this.getCurrentSessionId(req);
+    return this.authService.revokeOtherSessions(req.user, currentSessionId);
+  }
+
+  /**
+   * POST /auth/logout-all
+   * Logs out from all devices by revoking all refresh tokens.
+   */
+  @UseGuards(JwtAuthGuard)
+  @Post('logout-all')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Logout from all devices' })
+  logoutAll(@Req() req: RequestWithUser) {
+    return this.authService.logoutAll(req.user);
+  }
+
+  /**
+   * Extracts the current session ID from request headers.
+   * Defaults to 'current' if not provided.
+   */
+  private getCurrentSessionId(request: Request): string {
+    return (request.headers['x-session-id'] as string) ?? 'current';
   }
 
   // ======================================================
