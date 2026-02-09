@@ -38,6 +38,34 @@ export class RefreshToken {
   @UpdateDateColumn()
   updatedAt: Date;
 
+  // -------------------------------------------------
+  // SESSION MANAGEMENT FIELDS - ADD THESE
+  // -------------------------------------------------
+
+  /** Optional metadata about the device/session where the token is used. */
+  @Column({ length: 100, nullable: true })
+  deviceName?: string;
+
+  /** Device type (e.g., "mobile", "desktop", "tablet"). */
+  @Column({ length: 50, nullable: true })
+  deviceType?: string;
+
+  /** User agent string of the device/browser. */
+  @Column({ length: 255, nullable: true })
+  userAgent?: string;
+
+  /** IP address from which the token was issued. */
+  @Column({ length: 45, nullable: true })
+  ipAddress?: string;
+
+  /** Geographical location info (e.g., city, country). */
+  @Column({ length: 100, nullable: true })
+  location?: string;
+
+  /** Indicates if the session is currently active. */
+  @Column({ default: true })
+  isActive: boolean;
+
   /** Relation – many refresh tokens can belong to one user. */
   @ManyToOne(() => User, (user) => user.id, { onDelete: 'CASCADE' })
   @Index()
