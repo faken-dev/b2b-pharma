@@ -10,7 +10,7 @@ import { LogoutDto } from './dto/logout.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { PasswordResetToken } from './entities/password-reset-token.entity';
-import { Repository } from 'typeorm';
+import { MoreThan, Repository } from 'typeorm';
 import { User } from './entities/user.entity';
 import { InjectRepository } from '@nestjs/typeorm';
 import * as bcrypt from 'bcrypt';
@@ -33,6 +33,8 @@ import * as QRCode from 'qrcode';
 import { MfaLoginDto } from './dto/mfa-login.dto';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
+import { SessionListDto } from './dto/session.dto';
+import { Request } from 'express';
 interface EmailVerifyPayload {
   sub: string;
   email: string;
@@ -145,7 +147,7 @@ export class AuthService {
    */
   async verifyEmail(token: string) {
     // Verify the JWT – this also checks expiration automatically.
-    let payload: any;
+    let payload: EmailVerifyPayload;
     try {
       // `jwtService.verifyAsync` will throw on malformed/expired token.
       payload = await this.jwtService.verifyAsync<EmailVerifyPayload>(token);
@@ -156,7 +158,7 @@ export class AuthService {
     }
 
     // Payload sanity check – we expect an object with `sub` (user id)
-    const userId = payload?.sub;
+    const userId = payload.sub;
     if (!userId) {
       this.logger.warn(`Verification token missing "sub" claim`);
       throw new BadRequestException('Malformed verification token');
@@ -857,6 +859,139 @@ export class AuthService {
   }
 
   // ========================================================================
+  // Session Management
+  // ========================================================================
+
+  /**
+   * Get all active sessions for a user
+   */
+  async getSessions(user: User): Promise<SessionListDto> {
+    const sessions = await this.refreshTokenRepo.find({
+      where: {
+        user: { id: user.id },
+        revoked: false,
+        expiresAt: MoreThan(new Date()),
+      },
+      order: { createdAt: 'DESC' },
+    });
+
+    const sessionDtos = sessions.map((session) => ({
+      id: session.id,
+      deviceName: session.deviceName || 'Unknown Device',
+      deviceType: session.deviceType || 'unknown',
+      location: session.location || 'Unknown',
+      ipAddress: session.ipAddress || 'Unknown',
+      createdAt: session.createdAt,
+      lastActive: session.updatedAt,
+      isCurrent: false,
+    }));
+
+    return {
+      sessions: sessionDtos,
+      total: sessionDtos.length,
+    };
+  }
+
+  /**
+   * Revoke a specific session
+   */
+  async revokeSession(user: User, sessionId: string): Promise<void> {
+    const session = await this.refreshTokenRepo.findOne({
+      where: { id: sessionId, user: { id: user.id } },
+    });
+
+    if (!session) {
+      throw new BadRequestException('Session not found');
+    }
+
+    session.revoked = true;
+    await this.refreshTokenRepo.save(session);
+
+    // Audit log
+    await this.auditService.logSuccess(AuditAction.LOGOUT, {
+      user,
+      description: `Session revoked: ${session.deviceName}`,
+      metadata: { sessionId, deviceName: session.deviceName },
+    });
+  }
+
+  /**
+   * Revoke all other sessions (keep current one)
+   */
+  async revokeOtherSessions(
+    user: User,
+    currentSessionId: string,
+  ): Promise<void> {
+    const sessions = await this.refreshTokenRepo.find({
+      where: {
+        user: { id: user.id },
+        revoked: false,
+        expiresAt: MoreThan(new Date()),
+      },
+    });
+
+    for (const session of sessions) {
+      if (session.id !== currentSessionId) {
+        session.revoked = true;
+        await this.refreshTokenRepo.save(session);
+      }
+    }
+
+    await this.auditService.logSuccess(AuditAction.LOGOUT, {
+      user,
+      description: 'All other sessions revoked',
+      metadata: { sessionsRevoked: sessions.length - 1 },
+    });
+  }
+
+  /**
+   * Extract device name from User-Agent
+   */
+  private getDeviceName(request?: Request): string {
+    const ua = request?.headers['user-agent'] ?? '';
+
+    if (ua.includes('iPhone')) return 'iPhone';
+    if (ua.includes('iPad')) return 'iPad';
+    if (ua.includes('Android')) return 'Android Device';
+    if (ua.includes('Windows')) return 'Windows PC';
+    if (ua.includes('Macintosh')) return 'Mac';
+    if (ua.includes('Linux')) return 'Linux PC';
+
+    return 'Unknown Device';
+  }
+
+  /**
+   * Extract device type
+   */
+  private getDeviceType(request?: Request): string {
+    const ua = request?.headers['user-agent'] ?? '';
+
+    if (
+      ua.includes('Mobile') ||
+      ua.includes('Android') ||
+      ua.includes('iPhone')
+    ) {
+      return 'mobile';
+    }
+    if (ua.includes('Tablet') || ua.includes('iPad')) {
+      return 'tablet';
+    }
+    return 'desktop';
+  }
+
+  /**
+   * Get client IP address
+   */
+  private getClientIp(request?: Request): string {
+    return (
+      request?.ip ||
+      request?.connection?.remoteAddress ||
+      request?.socket?.remoteAddress ||
+      'unknown'
+    );
+  }
+
+  // ========================================================================
   // PRIVATE HELPERS - Password Hashing
   // ========================================================================
 
@@ -896,7 +1031,10 @@ export class AuthService {
    * Creates a new refresh token row in DB, returns the **plain** token.
    * The token is NOT stored in plain text – only its bcrypt hash is persisted.
    */
-  private async createRefreshToken(user: User): Promise<string> {
+  private async createRefreshToken(
+    user: User,
+    request?: Request,
+  ): Promise<string> {
     const rawToken = randomBytes(40).toString('hex');
     const tokenHash = await this.hashToken(rawToken);
 
@@ -910,6 +1048,13 @@ export class AuthService {
       expiresAt,
       user,
       revoked: false,
+      // Session info from request
+      deviceName: this.getDeviceName(request),
+      deviceType: this.getDeviceType(request),
+      userAgent: request?.headers?.['user-agent'],
+      ipAddress: this.getClientIp(request),
+      location: 'Unknown',
+      isActive: true,
     });
 
     await this.refreshTokenRepo.save(refreshEntity);
