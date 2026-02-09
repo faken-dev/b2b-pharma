@@ -31,6 +31,8 @@ import { VerifyOtpDto } from './dto/verify-otp.dto';
 import * as speakeasy from 'speakeasy';
 import * as QRCode from 'qrcode';
 import { MfaLoginDto } from './dto/mfa-login.dto';
+import { AuditService } from '../audit/audit.service';
+import { AuditAction } from '../audit/entities/audit-log.entity';
 interface EmailVerifyPayload {
   sub: string;
   email: string;
@@ -58,6 +60,7 @@ export class AuthService {
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
     private readonly notificationService: NotificationService,
+    private readonly auditService: AuditService,
   ) {}
 
   // ========================================================================
@@ -239,6 +242,10 @@ export class AuthService {
     }
 
     if (!user) {
+      await this.auditService.logFailure(AuditAction.LOGIN_FAILED, {
+        description: `Login failed - unknown identifier: ${identifier}`,
+        metadata: { identifier },
+      });
       throw new UnauthorizedException('Invalid credentials');
     }
 
@@ -267,6 +274,11 @@ export class AuthService {
     const passwordMatches = await this.comparePassword(password, user.password);
 
     if (!passwordMatches) {
+      await this.auditService.logFailure(AuditAction.LOGIN_FAILED, {
+        user,
+        description: `Login failed - invalid password for ${identifier}`,
+        metadata: { identifier },
+      });
       throw new UnauthorizedException('Invalid credentials');
     }
 
@@ -280,6 +292,12 @@ export class AuthService {
         throw new UnauthorizedException('Invalid MFA code');
       }
     }
+
+    await this.auditService.logSuccess(AuditAction.LOGIN_SUCCESS, {
+      user,
+      description: `Login successful via ${method}`,
+      metadata: { method, identifier },
+    });
 
     const tokens = await this.generateTokens(user);
     return tokens;
@@ -728,6 +746,10 @@ export class AuthService {
     });
 
     if (!verified) {
+      await this.auditService.logFailure(AuditAction.MFA_FAILED, {
+        user,
+        description: 'MFA setup verification failed',
+      });
       throw new BadRequestException('Invalid MFA code');
     }
 
@@ -735,7 +757,10 @@ export class AuthService {
     user.mfaEnabledAt = new Date();
     await this.userRepo.save(user);
 
-    this.logger.log(`MFA enabled for user ${user.id}`);
+    await this.auditService.logSuccess(AuditAction.MFA_VERIFIED, {
+      user,
+      description: 'MFA setup completed successfully',
+    });
     return {
       message: 'MFA enabled successfully',
       backupCodes: user.mfaBackupCodes,
