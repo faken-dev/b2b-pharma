@@ -1,4 +1,10 @@
-import { IsString, IsNotEmpty, Length } from 'class-validator';
+import {
+  IsString,
+  IsNotEmpty,
+  Length,
+  IsOptional,
+  Matches,
+} from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 
 export class MfaLoginDto {
@@ -20,7 +26,8 @@ export class MfaLoginDto {
     example: '123456',
     required: false,
   })
+  @IsOptional()
   @IsString()
-  @Length(6, 6, { message: 'MFA code must be 6 digits' })
+  @Matches(/^\d{6}$/, { message: 'MFA code must be 6 digits' })
   code?: string;
 }
