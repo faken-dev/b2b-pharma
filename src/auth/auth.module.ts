@@ -22,6 +22,7 @@ import { SessionService } from './services/session.service';
 import { PasswordManagementService } from './services/password-management.service';
 import { PasswordService } from './services/password.service';
 import { UserVerificationService } from './services/user-verification.service';
+import { PasswordHistory } from './entities/password-history.entity';
 
 @Module({
   imports: [
@@ -30,6 +31,7 @@ import { UserVerificationService } from './services/user-verification.service';
       RefreshToken,
       PasswordResetToken,
       OneTimeToken,
+      PasswordHistory,
     ]),
     NotificationModule,
     AuditModule,

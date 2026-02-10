@@ -14,8 +14,9 @@ import { Repository } from 'typeorm';
 import { PasswordHistory } from '../entities/password-history.entity';
 
 const COMMON_PASSWORDS_PATH = path.join(
-  __dirname,
-  '../../file/common-passwords.txt',
+  process.cwd(),
+  'file',
+  'common-passwords.txt',
 );
 
 @Injectable()

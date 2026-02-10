@@ -8,6 +8,7 @@ import { AdminModule } from './admin/admin.module';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
 import { SecurityMiddleware } from './common/middleware/security.middleware';
+import { AppController } from './app.controller';
 
 @Module({
   imports: [
@@ -51,7 +52,7 @@ import { SecurityMiddleware } from './common/middleware/security.middleware';
     AuthModule,
     AdminModule,
   ],
-  controllers: [],
+  controllers: [AppController],
   providers: [
     // Global Rate Limiting Guard
     {
