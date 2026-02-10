@@ -37,6 +37,9 @@ import { RateLimitHeadersInterceptor } from 'src/common/interceptors/rate-limit-
 import { UseInterceptors } from '@nestjs/common';
 import { SessionListDto } from './dto/session.dto';
 import { RevokeSessionDto } from './dto/revoke-session.dto';
+import { CheckPasswordDto } from './dto/check-password.dto';
+import { ChangePasswordDto } from './dto/change-password.dto';
+import { PasswordService } from './password.service';
 
 interface RequestWithUser extends Request {
   user: User;
@@ -45,8 +48,10 @@ interface RequestWithUser extends Request {
 @ApiTags('auth')
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
-
+  constructor(
+    private readonly authService: AuthService,
+    private readonly passwordService: PasswordService,
+  ) {}
   // ======================================================
   //  AUTHENTICATION – REGISTER / LOGIN / VERIFY
   // ======================================================
@@ -174,7 +179,7 @@ export class AuthController {
   }
 
   // ======================================================
-  //  PASSWORD RECOVERY
+  //  PASSWORD MANAGEMENT
   // ======================================================
 
   /**
@@ -215,6 +220,36 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   async setPassword(@Req() req: RequestWithUser, @Body() dto: SetPasswordDto) {
     return this.authService.setPasswordForOAuthUser(req.user, dto.newPassword);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('password/change')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Change current user password' })
+  async changePassword(
+    @Req() req: RequestWithUser,
+    @Body() dto: ChangePasswordDto,
+  ) {
+    return this.authService.changePassword(
+      req.user,
+      dto.currentPassword,
+      dto.newPassword,
+    );
+  }
+
+  @Post('password/check-strength')
+  @ApiOperation({ summary: 'Check password strength against policy' })
+  checkPasswordStrength(@Body() dto: CheckPasswordDto) {
+    return this.authService.checkPasswordStrength(dto.password);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('password/generate')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Generate a strong random password' })
+  generateStrongPassword() {
+    const password = this.passwordService.generateStrongPassword();
+    return { password };
   }
 
   // -----------------------------------------------------------------
