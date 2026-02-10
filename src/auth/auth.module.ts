@@ -15,6 +15,13 @@ import { PasswordResetToken } from './entities/password-reset-token.entity';
 import { GoogleStrategy } from './strategies/google.strategy';
 import { FacebookStrategy } from './strategies/facebook.strategy';
 import { OneTimeToken } from './entities/one-time-token.entity';
+import { AuditModule } from 'src/audit/audit.module';
+import { TokenService } from './services/token.service';
+import { MfaService } from './services/mfa.service';
+import { SessionService } from './services/session.service';
+import { PasswordManagementService } from './services/password-management.service';
+import { PasswordService } from './password.service';
+import { UserVerificationService } from './services/user-verification.service';
 
 @Module({
   imports: [
@@ -25,6 +32,7 @@ import { OneTimeToken } from './entities/one-time-token.entity';
       OneTimeToken,
     ]),
     NotificationModule,
+    AuditModule,
     ConfigModule,
     PassportModule.register({ defaultStrategy: 'jwt' }),
     JwtModule.registerAsync({
@@ -38,6 +46,12 @@ import { OneTimeToken } from './entities/one-time-token.entity';
   controllers: [AuthController],
   providers: [
     AuthService,
+    TokenService,
+    MfaService,
+    SessionService,
+    UserVerificationService,
+    PasswordService,
+    PasswordManagementService,
     JwtStrategy,
     JwtAuthGuard,
     TierGuard,
