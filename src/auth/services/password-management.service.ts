@@ -14,7 +14,7 @@ import { ResetPasswordDto } from '../dto/reset-password.dto';
 import { OneTimeTokenType } from '../enum/one-time-token-type';
 import { NotificationService } from '../../notification/notification.service';
 import { TokenService } from './token.service';
-import { PasswordService } from '../password.service';
+import { PasswordService } from './password.service';
 import { AuditService } from '../../audit/audit.service';
 import { AuditAction } from '../../audit/entities/audit-log.entity';
 import { normalizePhone } from 'src/common/utils/phone.util';

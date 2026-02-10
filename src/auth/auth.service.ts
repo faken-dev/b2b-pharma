@@ -34,7 +34,7 @@ import { normalizePhone } from 'src/common/utils/phone.util';
 
 // Services
 import { AuditService } from '../audit/audit.service';
-import { PasswordService } from './password.service';
+import { PasswordService } from './services/password.service';
 import { NotificationService } from '../notification/notification.service';
 import { TokenService } from './services/token.service';
 import { MfaService } from './services/mfa.service';

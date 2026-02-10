@@ -39,7 +39,7 @@ import { SessionListDto } from './dto/session.dto';
 import { RevokeSessionDto } from './dto/revoke-session.dto';
 import { CheckPasswordDto } from './dto/check-password.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
-import { PasswordService } from './password.service';
+import { PasswordService } from './services/password.service';
 
 interface RequestWithUser extends Request {
   user: User;

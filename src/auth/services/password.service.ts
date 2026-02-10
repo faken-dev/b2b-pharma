@@ -8,7 +8,10 @@ import { randomInt } from 'crypto';
 import {
   defaultPasswordPolicy,
   PasswordPolicy,
-} from './config/password-policy.config';
+} from '../config/password-policy.config';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { PasswordHistory } from '../entities/password-history.entity';
 
 const COMMON_PASSWORDS_PATH = path.join(
   __dirname,
@@ -20,7 +23,11 @@ export class PasswordService {
   private readonly policy: PasswordPolicy;
   private readonly commonPasswords = new Set<string>();
 
-  constructor(private readonly configService: ConfigService) {
+  constructor(
+    private readonly configService: ConfigService,
+    @InjectRepository(PasswordHistory)
+    private readonly passwordHistoryRepo: Repository<PasswordHistory>,
+  ) {
     this.policy = defaultPasswordPolicy;
 
     const data = fs.readFileSync(COMMON_PASSWORDS_PATH, 'utf8');
@@ -80,7 +87,7 @@ export class PasswordService {
   /**
    * Hash password with bcrypt
    */
-  async hashPassword(password: string): Promise<string> {
+  async hashPassword(password: string, userId?: string): Promise<string> {
     const validation = this.validatePassword(password);
     if (!validation.isValid) {
       throw new BadRequestException(
@@ -88,7 +95,21 @@ export class PasswordService {
       );
     }
 
-    return bcrypt.hash(password, 12);
+    const hash = await bcrypt.hash(password, 12);
+
+    // Save to history if userId provided
+    if (userId) {
+      const history = this.passwordHistoryRepo.create({
+        passwordHash: hash,
+        userId,
+      });
+      await this.passwordHistoryRepo.save(history);
+
+      // Keep only last N passwords
+      await this.cleanupOldPasswords(userId);
+    }
+
+    return hash;
   }
 
   /**
@@ -162,5 +183,35 @@ export class PasswordService {
     if (this.isCommonPassword(password)) score -= 30;
 
     return Math.max(0, Math.min(100, score));
+  }
+
+  private async cleanupOldPasswords(userId: string) {
+    const histories = await this.passwordHistoryRepo.find({
+      where: { userId },
+      order: { createdAt: 'DESC' },
+      skip: this.policy.preventReuse,
+    });
+
+    for (const history of histories) {
+      await this.passwordHistoryRepo.remove(history);
+    }
+  }
+
+  async isPasswordReused(
+    userId: string,
+    newPassword: string,
+  ): Promise<boolean> {
+    const histories = await this.passwordHistoryRepo.find({
+      where: { userId },
+      order: { createdAt: 'DESC' },
+      take: this.policy.preventReuse,
+    });
+
+    for (const history of histories) {
+      const isMatch = await bcrypt.compare(newPassword, history.passwordHash);
+      if (isMatch) return true;
+    }
+
+    return false;
   }
 }

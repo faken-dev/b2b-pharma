@@ -20,7 +20,7 @@ import { TokenService } from './services/token.service';
 import { MfaService } from './services/mfa.service';
 import { SessionService } from './services/session.service';
 import { PasswordManagementService } from './services/password-management.service';
-import { PasswordService } from './password.service';
+import { PasswordService } from './services/password.service';
 import { UserVerificationService } from './services/user-verification.service';
 
 @Module({
