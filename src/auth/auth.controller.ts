@@ -1,0 +1,477 @@
+import {
+  Controller,
+  Post,
+  Body,
+  HttpCode,
+  HttpStatus,
+  Get,
+  Query,
+  UseGuards,
+  Req,
+  Res,
+} from '@nestjs/common';
+import type { Request, Response } from 'express';
+import { RegisterDto } from './dto/register.dto';
+import { AuthService } from './auth.service';
+import { VerifyEmailDto } from './dto/verify-email.dto';
+import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { JwtAuthGuard } from './guard/jwt-auth.guard';
+import { AgentTier } from './enum/agent-tier.enum';
+import { Tier } from './decorator/tier.decorator';
+import { TierGuard } from './guard/tier.guard';
+import { LogoutDto } from './dto/logout.dto';
+import { RefreshTokenDto } from './dto/refresh-token.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { AuthGuard } from '@nestjs/passport';
+import { SetPasswordDto } from './dto/set-password.dto';
+import { User } from './entities/user.entity';
+import { VerifyOtpDto } from './dto/verify-otp.dto';
+import { RequestOtpDto } from './dto/request-otp.dto';
+import { MfaSetupDto } from './dto/mfa-setup.dto';
+import { MfaVerifyDto } from './dto/mfa-verify.dto';
+import { MfaDisableDto } from './dto/mfa-disable.dto';
+import { MfaLoginDto } from './dto/mfa-login.dto';
+import { Throttle } from '@nestjs/throttler';
+import { RateLimitHeadersInterceptor } from 'src/common/interceptors/rate-limit-headers.interceptor';
+import { UseInterceptors } from '@nestjs/common';
+import { SessionListDto } from './dto/session.dto';
+import { RevokeSessionDto } from './dto/revoke-session.dto';
+import { CheckPasswordDto } from './dto/check-password.dto';
+import { ChangePasswordDto } from './dto/change-password.dto';
+import { PasswordService } from './services/password.service';
+
+interface RequestWithUser extends Request {
+  user: User;
+}
+
+@ApiTags('auth')
+@Controller('auth')
+export class AuthController {
+  constructor(
+    private readonly authService: AuthService,
+    private readonly passwordService: PasswordService,
+  ) {}
+  // ======================================================
+  //  AUTHENTICATION – REGISTER / LOGIN / VERIFY
+  // ======================================================
+
+  /**
+   * POST /auth/register
+   * Creates a new account and sends a verification e-mail.
+   * Returns the created user (password excluded).
+   * Throttle limit: 20 requests per hour
+   */
+  @UseInterceptors(RateLimitHeadersInterceptor)
+  @Throttle({ long: { limit: 20, ttl: 3600000 } })
+  @Post('register')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({
+    summary: 'Register a new pharmacy/agent (email or phone required)',
+  })
+  async register(@Body() registerDto: RegisterDto) {
+    return this.authService.register(registerDto);
+  }
+
+  /**
+   * GET /auth/verify?token=...
+   * Confirms the e-mail address using the verification token.
+   * Throttle limit: 20 requests per hour
+   */
+  @UseInterceptors(RateLimitHeadersInterceptor)
+  @Throttle({ long: { limit: 20, ttl: 3600000 } })
+  @Get('verify-email')
+  @ApiOperation({ summary: 'Verify e-mail address using token' })
+  async verify(@Query() query: VerifyEmailDto) {
+    return this.authService.verifyEmail(query.token);
+  }
+
+  /**
+   * POST /auth/verify-phone
+   * Verifies phone number using OTP code.
+   * Throttle limit: 20 requests per hour
+   */
+  @UseInterceptors(RateLimitHeadersInterceptor)
+  @Throttle({ long: { limit: 20, ttl: 3600000 } })
+  @Post('verify-phone')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Verify phone number using OTP' })
+  async verifyPhone(@Body() dto: VerifyOtpDto) {
+    return this.authService.verifyPhone(dto);
+  }
+
+  /**
+   * POST /auth/login
+   * Authenticates user credentials and returns JWT tokens.
+   * Throttle limit: 5 requests per minute
+   */
+  @UseInterceptors(RateLimitHeadersInterceptor)
+  @Throttle({ short: { limit: 5, ttl: 60000 } })
+  @Post('login')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Login with e-mail & password' })
+  async login(@Body() loginDto: MfaLoginDto) {
+    return this.authService.login(loginDto);
+  }
+
+  // ======================================================
+  //  TOKEN MANAGEMENT
+  // ======================================================
+
+  /**
+   * POST /auth/refresh
+   * Issues a new access token using a valid refresh token.
+   */
+  @Post('refresh')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Refresh JWT pair using a refresh token' })
+  refresh(@Body() dto: RefreshTokenDto) {
+    return this.authService.refreshTokens(dto);
+  }
+
+  /**
+   * POST /auth/logout
+   * Revokes the given refresh token and logs the user out.
+   */
+  @Post('logout')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Logout – invalidate a refresh token' })
+  logout(@Body() dto: LogoutDto) {
+    return this.authService.logout(dto);
+  }
+
+  // ======================================================
+  //  OTP
+  // ======================================================
+
+  /**
+   * POST /auth/otp/request
+   * Sends an OTP to the user’s phone for verification or password reset.
+   * Throttle limit: 5 requests per minute
+   */
+  @UseInterceptors(RateLimitHeadersInterceptor)
+  @Throttle({ short: { limit: 5, ttl: 60000 } })
+  @Post('otp/request')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary:
+      'Request OTP – default is phone verification; use type = PASSWORD_RESET for reset flow',
+  })
+  async requestOtp(@Body() dto: RequestOtpDto) {
+    return this.authService.requestOtp(dto);
+  }
+
+  /**
+   * POST /auth/otp/verify
+   * Verifies the OTP code for phone verification or password reset.
+   * Throttle limit: 20 requests per hour
+   */
+  @UseInterceptors(RateLimitHeadersInterceptor)
+  @Throttle({ long: { limit: 20, ttl: 3600000 } })
+  @Post('otp/verify')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary:
+      'Verify OTP, update verification flags, or confirm password‑reset OTP',
+  })
+  async verifyOtp(@Body() dto: VerifyOtpDto) {
+    return this.authService.verifyOtp(dto);
+  }
+
+  // ======================================================
+  //  PASSWORD MANAGEMENT
+  // ======================================================
+
+  /**
+   * POST /auth/forgot-password
+   * Sends a password reset e-mail if the user exists.
+   */
+  @UseInterceptors(RateLimitHeadersInterceptor)
+  @Post('forgot-password')
+  @HttpCode(HttpStatus.OK)
+  async forgotPassword(@Body() dto: ForgotPasswordDto) {
+    return this.authService.requestPasswordReset(dto);
+  }
+
+  /**
+   * POST /auth/reset-password
+   * Updates the password using the reset token from e-mail.
+   */
+  @Post('reset-password')
+  @HttpCode(HttpStatus.OK)
+  async resetPassword(@Body() dto: ResetPasswordDto) {
+    return this.authService.resetPassword(dto);
+  }
+
+  // @Post('reset-password-otp')
+  // @HttpCode(HttpStatus.OK)
+  // @ApiOperation({ summary: 'Reset password using phone OTP' })
+  // async resetPasswordOtp(@Body() dto: ResetPasswordOtpDto) {
+  //   return this.authService.resetPasswordWithOtp(dto.phoneNumber, dto.otp, dto.newPassword);
+  // }
+
+  /**
+   * POST /auth/set-password
+   * Allows a logged‑in social user to set a local password.
+   * After this call the account’s authProvider becomes LOCAL.
+   */
+  @UseGuards(JwtAuthGuard)
+  @Post('set-password')
+  @HttpCode(HttpStatus.OK)
+  async setPassword(@Req() req: RequestWithUser, @Body() dto: SetPasswordDto) {
+    return this.authService.setPasswordForOAuthUser(req.user, dto.newPassword);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('password/change')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Change current user password' })
+  async changePassword(
+    @Req() req: RequestWithUser,
+    @Body() dto: ChangePasswordDto,
+  ) {
+    return this.authService.changePassword(
+      req.user,
+      dto.currentPassword,
+      dto.newPassword,
+    );
+  }
+
+  @Post('password/check-strength')
+  @ApiOperation({ summary: 'Check password strength against policy' })
+  checkPasswordStrength(@Body() dto: CheckPasswordDto) {
+    return this.authService.checkPasswordStrength(dto.password);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('password/generate')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Generate a strong random password' })
+  generateStrongPassword() {
+    const password = this.passwordService.generateStrongPassword();
+    return { password };
+  }
+
+  // -----------------------------------------------------------------
+  // MFA ENDPOINTS (Protected by JWT)
+  // -----------------------------------------------------------------
+
+  /**
+   * POST /auth/mfa/setup
+   * Generates MFA secret and QR code for the current user.
+   * Throttle limit: 10 requests per 5 minutes
+   */
+  @Throttle({ medium: { limit: 10, ttl: 300000 } })
+  @UseGuards(JwtAuthGuard)
+  @Post('mfa/setup')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Setup MFA - generates secret and QR code' })
+  async setupMfa(@Req() req: RequestWithUser, @Body() dto: MfaSetupDto) {
+    return this.authService.setupMfa(req.user, dto.password);
+  }
+
+  /**
+   * POST /auth/mfa/verify-setup
+   * Verifies the TOTP code and enables MFA for the current user.
+   * Throttle limit: 10 requests per 5 minutes
+   */
+  @Throttle({ medium: { limit: 10, ttl: 300000 } })
+  @UseGuards(JwtAuthGuard)
+  @Post('mfa/verify-setup')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Verify MFA setup with TOTP code' })
+  async verifyMfaSetup(@Req() req: RequestWithUser, @Body() dto: MfaVerifyDto) {
+    return this.authService.verifyMfaSetup(req.user, dto.code);
+  }
+
+  /**
+   * POST /auth/mfa/disable
+   * Disables MFA for the current user after verifying password and code.
+   */
+  @UseGuards(JwtAuthGuard)
+  @Post('mfa/disable')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Disable MFA for current user' })
+  async disableMfa(@Req() req: RequestWithUser, @Body() dto: MfaDisableDto) {
+    return this.authService.disableMfa(req.user, dto.password, dto.code);
+  }
+
+  /**
+   * POST /auth/mfa/regenerate-backup-codes
+   * Generates new MFA backup codes for the current user.
+   */
+  @UseGuards(JwtAuthGuard)
+  @Post('mfa/regenerate-backup-codes')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Generate new MFA backup codes' })
+  async regenerateBackupCodes(
+    @Req() req: RequestWithUser,
+    @Body() dto: MfaSetupDto,
+  ) {
+    return this.authService.regenerateBackupCodes(req.user, dto.password);
+  }
+
+  // ======================================================
+  //  USER PROFILE
+  // ======================================================
+
+  /**
+   * GET /auth/me
+   * Returns the currently authenticated user.
+   */
+  @Get('me')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Get current user profile (password omitted)' })
+  getProfile(@Req() req: RequestWithUser) {
+    const { password, ...profile } = req.user as any;
+    return profile;
+  }
+
+  // -----------------------------------------------------------------
+  // SESSION MANAGEMENT ENDPOINTS
+  // -----------------------------------------------------------------
+
+  /**
+   * GET /auth/sessions
+   * Returns all active sessions for the current user.
+   */
+  @UseGuards(JwtAuthGuard)
+  @Get('sessions')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Get all active sessions for current user' })
+  async getSessions(@Req() req: RequestWithUser): Promise<SessionListDto> {
+    return this.authService.getSessions(req.user);
+  }
+
+  /**
+   * POST /auth/sessions/revoke
+   * Revokes a specific session by its ID.
+   */
+  @UseGuards(JwtAuthGuard)
+  @Post('sessions/revoke')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Revoke a specific session' })
+  async revokeSession(
+    @Req() req: RequestWithUser,
+    @Body() dto: RevokeSessionDto,
+  ) {
+    return this.authService.revokeSession(req.user, dto.sessionId);
+  }
+
+  /**
+   * POST /auth/sessions/revoke-others
+   * Revokes all other sessions for the current user (keeping the current session).
+   */
+  @UseGuards(JwtAuthGuard)
+  @Post('sessions/revoke-others')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Revoke all other sessions (keep current)' })
+  async revokeOtherSessions(@Req() req: RequestWithUser) {
+    const currentSessionId = this.getCurrentSessionId(req);
+    return this.authService.revokeOtherSessions(req.user, currentSessionId);
+  }
+
+  /**
+   * POST /auth/logout-all
+   * Logs out from all devices by revoking all refresh tokens.
+   */
+  @UseGuards(JwtAuthGuard)
+  @Post('logout-all')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Logout from all devices' })
+  logoutAll(@Req() req: RequestWithUser) {
+    return this.authService.logoutAll(req.user);
+  }
+
+  /**
+   * Extracts the current session ID from request headers.
+   * Defaults to 'current' if not provided.
+   */
+  private getCurrentSessionId(request: Request): string {
+    return (request.headers['x-session-id'] as string) ?? 'current';
+  }
+
+  // ======================================================
+  //  TIER-BASED ACCESS
+  // ======================================================
+
+  /**
+   * GET /auth/premium-data
+   * Example endpoint restricted to GOLD tier users only.
+   */
+  @Get('premium-data')
+  @UseGuards(JwtAuthGuard, TierGuard)
+  @Tier(AgentTier.GOLD)
+  getPremiumData(@Req() req: RequestWithUser) {
+    return {
+      message: `Welcome, ${req.user.pharmacyName}! Here is your premium data.`,
+    };
+  }
+
+  // ======================================================
+  //  OAUTH – GOOGLE
+  // ======================================================
+
+  /**
+   * GET /auth/google
+   * Redirects the user to Google OAuth login.
+   */
+  @Get('google')
+  @UseGuards(AuthGuard('google'))
+  googleAuth() {}
+
+  /**
+   * GET /auth/google/callback
+   * Handles Google OAuth callback and issues local JWT.
+   */
+  @Get('google/callback')
+  @UseGuards(AuthGuard('google'))
+  async googleCallback(@Req() req: RequestWithUser, @Res() res: Response) {
+    return this.handleOAuthCallback(req, res);
+  }
+
+  // ======================================================
+  //  OAUTH – FACEBOOK
+  // ======================================================
+
+  /**
+   * GET /auth/facebook
+   * Redirects the user to Facebook OAuth login.
+   */
+  @Get('facebook')
+  @UseGuards(AuthGuard('facebook'))
+  facebookAuth() {}
+
+  /**
+   * GET /auth/facebook/callback
+   * Handles Facebook OAuth callback and issues local JWT.
+   */
+  @Get('facebook/callback')
+  @UseGuards(AuthGuard('facebook'))
+  async facebookCallback(@Req() req: RequestWithUser, @Res() res: Response) {
+    return this.handleOAuthCallback(req, res);
+  }
+
+  // ======================================================
+  //  SHARED OAUTH HANDLER
+  // ======================================================
+
+  /**
+   * Issues JWT tokens after a successful OAuth login
+   * and stores the access token inside an HTTP-only cookie.
+   */
+  private async handleOAuthCallback(req: RequestWithUser, res: Response) {
+    const { accessToken } = await this.authService.issueTokens(req.user);
+
+    res.cookie('access_token', accessToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
+
+    return res.redirect(
+      `${process.env.FRONTEND_URL || 'http://localhost:3000'}/dashboard`,
+    );
+  }
+}
